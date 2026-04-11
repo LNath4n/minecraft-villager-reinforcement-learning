@@ -3,7 +3,8 @@
 	"package": "com.lnathan.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
-		"ExampleMixin"
+		"ExampleMixin",
+		"VillagerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
