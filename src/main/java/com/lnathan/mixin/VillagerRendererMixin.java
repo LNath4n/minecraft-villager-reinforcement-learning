@@ -14,11 +14,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class VillagerRendererMixin {
 
     @Inject(at = @At("TAIL"), method = "extractRenderState")
-    private void extractHunger(Villager entity, VillagerRenderState state, float partialTicks, CallbackInfo ci) {
-        // Leemos el dato sincronizado que pusimos en VillagerDataMixin
-        // y lo copiamos al RenderState para que la layer pueda usarlo
-        ((VillagerRenderStateAccessor) state).setHungry(
-                ((VillagerDataSync) entity).isHungry()
+    private void extractState(Villager entity, VillagerRenderState state, float partialTicks, CallbackInfo ci) {
+        ((VillagerRenderStateAccessor) state).setVillagerState(
+                ((VillagerDataSync) entity).getVillagerState()
         );
     }
 }

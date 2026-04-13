@@ -1,6 +1,6 @@
 package com.lnathan.villager;
 
 public interface VillagerRenderStateAccessor {
-    boolean isHungry();
-    void setHungry(boolean hungry);
+    VillagerState getVillagerState();
+    void setVillagerState(VillagerState state);
 }
