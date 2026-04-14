@@ -3,4 +3,4 @@ package com.lnathan.villager;
 public interface VillagerDataSync {
     VillagerState getVillagerState();
     void setVillagerState(VillagerState state);
-}
+}// Sirve para hablar del aldeano en el servidor

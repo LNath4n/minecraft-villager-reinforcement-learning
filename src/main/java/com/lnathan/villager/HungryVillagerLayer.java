@@ -14,7 +14,7 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-
+//Dibujamos sobre el aldeano
 public class HungryVillagerLayer extends RenderLayer<VillagerRenderState, VillagerModel> {
 
     private final ItemModelResolver itemModelResolver;
