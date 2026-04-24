@@ -15,24 +15,55 @@ import net.minecraft.world.level.storage.loot.BuiltInLootTables;
 import java.util.HashSet;
 import java.util.Set;
 
-// Constructor físico de una carpa individual.
-// Recibe el origen (esquina norte-oeste) y construye todo lo que hay dentro:
-// piso de tablones, postes, lona de lana, cama, cofre con loot, mesa de trabajo y hoguera.
-//
-// El método place() hace todas las validaciones ANTES de tocar el mundo:
-//   1. Obstáculos (árboles, rocas)
-//   2. Irregularidad general del terreno (±3 bloques del origen)
-//   3. Fragmentación del piso en demasiadas alturas distintas
-//   4. Ausencia de suelo bajo el mobiliario
-// Si cualquier validación falla, se devuelve null sin haber modificado nada.
+/**
+ * Constructor físico de una carpa individual dentro de un campamento.
+ *
+ * <p>Recibe la esquina noroeste del área de la carpa y construye todos los
+ * elementos interiores: piso de tablones, postes de roble, lona de lana,
+ * cama, cofre con loot, mesa de trabajo y hoguera exterior.
+ *
+ * <h3>Proceso de validación</h3>
+ * <p>Antes de modificar el mundo, {@link #place} ejecuta cuatro comprobaciones
+ * en este orden. Si alguna falla, devuelve {@code null} sin haber tocado nada:
+ * <ol>
+ *   <li><b>Chunks cargados:</b> verifica las cuatro esquinas del área para
+ *       evitar "chunk holes" o bloques silenciados.</li>
+ *   <li><b>Obstáculos:</b> escanea el volumen completo en busca de troncos,
+ *       hojas, cactus, piedra o adoquín.</li>
+ *   <li><b>Irregularidad:</b> más de la mitad del piso fuera de ±3 bloques del
+ *       origen indica terreno no apto.</li>
+ *   <li><b>Fragmentación:</b> más de 2 alturas distintas en el piso hace la
+ *       carpa visualmente incorrecta.</li>
+ * </ol>
+ *
+ * <h3>Adaptación al terreno</h3>
+ * <p>El piso "sigue" el terreno: cada tablón se coloca en su propia Y real
+ * (calculada por {@link #buscarYSuelo}). Los postes se dimensionan dinámicamente
+ * para compensar desniveles, y la lona forma una pirámide Chebyshev cuya altura
+ * siempre queda al menos 3 bloques sobre el piso central.
+ *
+ * <h3>Tamaños disponibles</h3>
+ * <ul>
+ *   <li>{@link carpaSize#CHICA}  7×7 bloques, 1 cama, 1 cofre (común).</li>
+ *   <li>{@link carpaSize#GRANDE}  11×11 bloques, 2 camas, 2 cofres, lona más
+ *       alta (rara, ~20% de probabilidad según {@code CampamentoPlacer}).</li>
+ * </ul>
+ */
 public class CampamentoStructure {
 
-    // Tamaños disponibles para las carpas.
-    // CHICA: 7×7, la carpa estándar (común).
-    // GRANDE: 11×11, más rara, con 2 camas, 2 cofres y lona más alta.
+    /**
+     * Tamaños disponibles para las carpas del campamento.
+     * <ul>
+     *   <li>{@code CHICA}  7×7 bloques, la carpa estándar (más común).</li>
+     *   <li>{@code GRANDE}  11×11 bloques, con 2 camas y 2 cofres (más rara).</li>
+     * </ul>
+     */
     public enum carpaSize { CHICA, GRANDE }
 
-    // Colores disponibles para la lona se elige uno al azar por carpa
+    /**
+     * Colores de lana disponibles para la lona de la carpa.
+     * Se elige uno al azar por carpa para dar variedad visual al campamento.
+     */
     private static final BlockState[] LANAS = {
             Blocks.WHITE_WOOL.defaultBlockState(),
             Blocks.ORANGE_WOOL.defaultBlockState(),
@@ -41,7 +72,10 @@ public class CampamentoStructure {
             Blocks.RED_WOOL.defaultBlockState(),
     };
 
-    // Mesas de trabajo disponibles determinan la profesión que puede adoptar el aldeano
+    /**
+     * Mesas de trabajo disponibles. La mesa colocada determina la profesión que
+     * el aldeano asignado puede adoptar al detectar el POI correspondiente.
+     */
     private static final BlockState[] MESAS = {
             Blocks.COMPOSTER.defaultBlockState(),         // Granjero
             Blocks.CARTOGRAPHY_TABLE.defaultBlockState(), // Cartógrafo
@@ -50,7 +84,10 @@ public class CampamentoStructure {
             Blocks.LECTERN.defaultBlockState(),           // Bibliotecario
     };
 
-    // Colores de cama disponibles puramente estético, se elige al azar
+    /**
+     * Colores de cama disponibles. Puramente estético; se elige al azar para
+     * que las carpas no se vean idénticas entre sí.
+     */
     private static final BlockState[] CAMAS = {
             Blocks.RED_BED.defaultBlockState(),
             Blocks.BLUE_BED.defaultBlockState(),
@@ -58,9 +95,17 @@ public class CampamentoStructure {
             Blocks.BROWN_BED.defaultBlockState(),
     };
 
-    // Bloques que consideramos obstáculos árboles, cactus, bambú.
-    // Su presencia dentro del área de la carpa hace que la cancelemos
-    // porque colisionar con ellos dejaría la estructura incompleta o deformada.
+    /**
+     * Determina si un bloque se considera un obstáculo que impide colocar la carpa.
+     *
+     * <p>Se consideran obstáculos: troncos y hojas de todos los tipos de árbol
+     * vanilla, cactus, bambú, piedra y adoquín (con o sin musgo). La presencia
+     * de cualquiera de estos dentro del volumen de la carpa cancela la construcción
+     * para evitar estructuras incompletas o superpuestas con vegetación.
+     *
+     * @param estado el {@link BlockState} a evaluar
+     * @return {@code true} si el bloque es un obstáculo
+     */
     private static boolean esObstaculo(BlockState estado) {
         return estado.is(Blocks.OAK_LOG)
                 || estado.is(Blocks.BIRCH_LOG)
@@ -87,8 +132,16 @@ public class CampamentoStructure {
                 || estado.is(Blocks.MOSSY_COBBLESTONE);
     }
 
-    // Bloques que el piso, postes y mobiliario pueden reemplazar sin problema.
-    // Todo lo demás (piedra, tablones de otra estructura, etc.) se respeta.
+    /**
+     * Determina si un bloque puede ser reemplazado por el piso, los postes
+     * o el mobiliario de la carpa sin destruir estructuras preexistentes.
+     *
+     * <p>Solo se reemplazan aire y vegetación menor (hierba, flores, arbustos
+     * muertos). Cualquier bloque sólido no listado aquí se respeta.
+     *
+     * @param estado el {@link BlockState} a evaluar
+     * @return {@code true} si el bloque puede ser sobrescrito
+     */
     private static boolean esReemplazable(BlockState estado) {
         return estado.isAir()
                 || estado.is(Blocks.SHORT_GRASS)
@@ -106,12 +159,21 @@ public class CampamentoStructure {
                 || estado.is(Blocks.SUNFLOWER);
     }
 
-    // Baja desde origenY hasta 5 bloques más abajo buscando el primer punto donde:
-    //    el bloque actual es reemplazable (aire o vegetación)
-    //    el bloque de abajo es sólido
-    // Eso indica la posición donde se puede colocar un tablón o bloque de mobiliario.
-    // Devuelve -1 si no encontró suelo válido en el rango funciona como centinela
-    // para evitar confundir "Y=0 real" con "no encontrado" (Y=0 es filtrará por y<60).
+    /**
+     * Busca hacia abajo desde {@code origenY} hasta {@code origenY - 5} el primer
+     * punto donde el bloque actual es reemplazable y el bloque inferior es sólido.
+     *
+     * <p>Este valor representa la posición donde se puede colocar un tablón o
+     * pieza de mobiliario de forma que quede apoyado en el suelo. Se devuelve
+     * {@code -1} como centinela cuando no se encuentra suelo válido en el rango
+     * (no confundir con Y=0 real, que siempre queda fuera del rango permitido ≥60).
+     *
+     * @param level   el nivel donde buscar
+     * @param x       coordenada X del bloque
+     * @param z       coordenada Z del bloque
+     * @param origenY Y desde la que comienza la búsqueda hacia abajo
+     * @return la Y del primer punto con suelo válido, o {@code -1} si no se encontró
+     */
     private static int buscarYSuelo(LevelAccessor level, int x, int z, int origenY) {
         for (int dy = 0; dy >= -5; dy--) {
             BlockPos actual = new BlockPos(x, origenY + dy, z);
@@ -124,20 +186,47 @@ public class CampamentoStructure {
         return -1;
     }
 
-    // Empaqueta los dos datos que CampamentoPlacer necesita para configurar al aldeano:
-    //   posMesa   se asigna como JOB_SITE (profesión)
-    //   posCama   se asigna como HOME (a dónde va a dormir)
-    // Devolver ambos evita que CampamentoPlacer calcule offsets hardcodeados
-    // que serían incorrectos en terreno con desnivel.
+    /**
+     * Contiene las posiciones clave que {@code CampamentoPlacer} necesita para
+     * configurar al aldeano que habitará la carpa.
+     *
+     * <p>Devolver ambas posiciones desde aquí evita que {@code CampamentoPlacer}
+     * use offsets hardcodeados que serían incorrectos en terreno con desnivel.
+     *
+     * @param posMesa posición de la mesa de trabajo; se asigna como
+     *                {@link net.minecraft.world.entity.ai.memory.MemoryModuleType#JOB_SITE}
+     * @param posCama posición de la cabecera de la cama; se asigna como
+     *                {@link net.minecraft.world.entity.ai.memory.MemoryModuleType#HOME}
+     */
     public record PlaceResult(BlockPos posMesa, BlockPos posCama) {}
 
-    // Punto de entrada principal. Sin tamaño = carpa CHICA (compatibilidad con código existente).
+    /**
+     * Construye una carpa {@link carpaSize#CHICA} en el origen indicado.
+     * Sobrecarga de compatibilidad sin parámetro de tamaño.
+     *
+     * @param level   el nivel donde construir
+     * @param origen  esquina noroeste del área de la carpa
+     * @param random  fuente de aleatoriedad para variantes visuales y loot
+     * @return {@link PlaceResult} con las posiciones de mesa y cama, o {@code null}
+     *         si la carpa no pudo construirse
+     */
     public static PlaceResult place(LevelAccessor level, BlockPos origen, RandomSource random) {
         return place(level, origen, random, carpaSize.CHICA);
     }
 
-    // Sobrecarga con tamaño. CHICA construye la carpa estándar 7×7.
-    // GRANDE construye una versión escalada 11×11 con 2 camas y 2 cofres.
+    /**
+     * Construye una carpa del tamaño indicado en el origen especificado.
+     *
+     * <p>Delega en {@link #placeChica} o {@link #placeGrande} según el tamaño.
+     * Devuelve {@code null} si alguna validación falla (ver descripción de clase).
+     *
+     * @param level  el nivel donde construir
+     * @param origen esquina noroeste del área de la carpa
+     * @param random fuente de aleatoriedad para variantes visuales y loot
+     * @param tamaño {@link carpaSize#CHICA} (7×7) o {@link carpaSize#GRANDE} (11×11)
+     * @return {@link PlaceResult} con posición de mesa y cama, o {@code null} si
+     *         la construcción fue cancelada por alguna validación
+     */
     public static PlaceResult place(LevelAccessor level, BlockPos origen,
                                     RandomSource random, carpaSize tamaño) {
         if (tamaño == carpaSize.CHICA) {
@@ -147,9 +236,28 @@ public class CampamentoStructure {
         }
     }
 
-    //
     // CARPA CHICA 7×7
-    //
+
+    /**
+     * Construye la carpa estándar de 7×7 bloques.
+     *
+     * <p>Secuencia de construcción (tras pasar todas las validaciones):
+     * <ol>
+     *   <li>Piso de tablones de roble siguiendo la Y real de cada punto.</li>
+     *   <li>Poste central hasta el pico de la lona (yCentro + 7) y 4 postes
+     *       de esquina dimensionados dinámicamente.</li>
+     *   <li>Lona de lana en pirámide Chebyshev centrada en (3,3).</li>
+     *   <li>Cama (pie en Z+1, cabecera en Z+2) orientada al sur.</li>
+     *   <li>Cofre con loot table {@code village/plains/house}.</li>
+     *   <li>Mesa de trabajo aleatoria.</li>
+     *   <li>Hoguera exterior al sur (Z+6).</li>
+     * </ol>
+     *
+     * @param level  el nivel donde construir
+     * @param origen esquina NW del área 7×7
+     * @param random fuente de aleatoriedad
+     * @return {@link PlaceResult} o {@code null} si alguna validación falla
+     */
     private static PlaceResult placeChica(LevelAccessor level, BlockPos origen, RandomSource random) {
 
         // Verificamos que los chunks de las cuatro esquinas de la carpa estén cargados.
@@ -159,7 +267,7 @@ public class CampamentoStructure {
                     !serverLevel.isLoaded(origen.offset(6, 0, 0)) ||
                     !serverLevel.isLoaded(origen.offset(0, 0, 6)) ||
                     !serverLevel.isLoaded(origen.offset(6, 0, 6))) {
-                System.out.println("[Structure] Chunk no cargado, cancelando carpa");
+                //System.out.println("[CampamentoStructure] Chunk no cargado, cancelando carpa");
                 return null;
             }
         }
@@ -171,7 +279,7 @@ public class CampamentoStructure {
 
         int origenY = origen.getY();
 
-        // Detectar obstaculos
+        // Detectar obstáculos
         // Escaneamos el volumen 7×7 bloques de ancho × 10 bloques de alto.
         // dy=-1 incluye el bloque del suelo, dy=8 cubre la altura de la lona.
         // Si hay cualquier obstáculo, cancelamos antes de tocar el mundo.
@@ -181,7 +289,7 @@ public class CampamentoStructure {
                     BlockState b = level.getBlockState(
                             new BlockPos(origen.getX() + x, origenY + dy, origen.getZ() + z));
                     if (esObstaculo(b)) {
-                        System.out.println("[Structure] Obstáculo detectado (" + b + "), cancelando carpa");
+                        //System.out.println("[CampamentoStructure] Obstáculo detectado (" + b + "), cancelando carpa");
                         return null;
                     }
                 }
@@ -218,7 +326,7 @@ public class CampamentoStructure {
         }
 
         if (tablonesValidos < tablonesTotal / 2) {
-            System.out.println("[Structure] Terreno muy irregular, cancelando carpa");
+            //System.out.println("[CampamentoStructure] Terreno muy irregular, cancelando carpa");
             return null;
         }
 
@@ -232,7 +340,7 @@ public class CampamentoStructure {
             }
         }
         if (nivelesDistintos.size() > 2) {
-            System.out.println("[Structure] Piso fragmentado en " + nivelesDistintos.size() + " niveles, cancelando carpa");
+            //System.out.println("[CampamentoStructure] Piso fragmentado en + nivelesDistintos.size() + " niveles, cancelando carpa");
             return null;
         }
 
@@ -244,13 +352,11 @@ public class CampamentoStructure {
         int yMesa  = buscarYSuelo(level, origen.getX() + 4, origen.getZ() + 2, origenY);
 
         if (yCama == -1 || yCofre == -1 || yMesa == -1) {
-            System.out.println("[Structure] Sin suelo para mobiliario, cancelando carpa");
+            //System.out.println("[CampamentoStructure] Sin suelo para mobiliario, cancelando carpa");
             return null;
         }
 
-        // Checamos el piso para que no flote
-        // Cada tablón se coloca en su propia Y real, lo que hace que el piso
-        // "siga" el terreno en lugar de flotar o hundirse.
+        // Piso tablones siguen la Y real de cada punto para adaptarse al terreno
         for (int x = 1; x < 6; x++) {
             for (int z = 1; z < 6; z++) {
                 int y = yPiso[x][z];
@@ -260,15 +366,14 @@ public class CampamentoStructure {
             }
         }
 
-        // Postes que sostengan la carpa
+        // Postes que sostienen la lona
         // El poste central llega hasta el pico de la lona (yCentro + 7).
         // Los postes de esquina llegan exactamente hasta donde la lona los toca
         // (yLonaTop - 3, porque la distancia Chebyshev de esquina a centro es 3).
-        // Calculamos la altura de cada poste dinámicamente para compensar desniveles:
-        // si una esquina está 2 bloques más alta, su poste necesita 2 bloques menos.
+        // Calculamos la altura de cada poste dinámicamente para compensar desniveles.
         int yCentro      = yPiso[3][3] != -1 ? yPiso[3][3] : origenY;
         int yLonaTop     = yCentro + 7;  // pico de la lona = tope del poste central
-        int yLonaEsquina = yLonaTop - 3; // altura de la lona en cada esquina
+        int yLonaEsquina = yLonaTop - 3; // altura de la lona en cada esquina (dist. Chebyshev = 3)
 
         colocarPoste(level,
                 new BlockPos(origen.getX() + 3, yCentro, origen.getZ() + 3),
@@ -283,11 +388,10 @@ public class CampamentoStructure {
         colocarPoste(level, new BlockPos(origen.getX() + 1, yE3, origen.getZ() + 5), Math.max(1, yLonaEsquina - yE3));
         colocarPoste(level, new BlockPos(origen.getX() + 5, yE4, origen.getZ() + 5), Math.max(1, yLonaEsquina - yE4));
 
-        // Lona
-        // La lona forma una pirámide invertida centrada en (3,3).
+        // Lona en pirámide Chebyshev
         // La altura de cada bloque = yLonaTop - distancia_Chebyshev_al_centro.
         // Solo colocamos bloques que estén al menos 3 por encima del suelo central
-        // para que la lona no toque el piso en carpas muy pequeñas.
+        // para que la lona no toque el piso en terreno muy plano.
         for (int x = 0; x < 7; x++) {
             for (int z = 0; z < 7; z++) {
                 int distX  = Math.abs(x - 3);
@@ -300,9 +404,7 @@ public class CampamentoStructure {
             }
         }
 
-        // Cama
-        // La cama ocupa dos bloques: FOOT al sur (z+1) y HEAD al norte (z+2).
-        // Ambos van en yCama+1 (encima del suelo encontrado por buscarYSuelo).
+        // Cama FOOT en Z+1 (al sur), HEAD en Z+2, ambos en yCama+1
         BlockPos piePos      = new BlockPos(origen.getX() + 2, yCama + 1, origen.getZ() + 1);
         BlockPos posCabecera = new BlockPos(origen.getX() + 2, yCama + 1, origen.getZ() + 2);
         level.setBlock(piePos,
@@ -312,43 +414,54 @@ public class CampamentoStructure {
                 cama.setValue(BlockStateProperties.BED_PART, BedPart.HEAD)
                         .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH), 3);
 
-        // Cofre
-        // Asignamos la loot table de casa de aldea (plains) al cofre.
-        // Minecraft la resuelve la primera vez que un jugador lo abre,
-        // generando ítems aleatorios como en cualquier aldea vanilla.
-        // La semilla del loot viene del random del campamento — cada cofre es distinto.
+        // Cofre con loot table de casa de aldea (plains).
+        // Minecraft resuelve el loot la primera vez que un jugador lo abre.
+        // La semilla del random garantiza que cada cofre tenga contenido distinto.
         BlockPos posCofre = new BlockPos(origen.getX() + 4, yCofre + 1, origen.getZ() + 1);
         level.setBlock(posCofre, Blocks.CHEST.defaultBlockState(), 3);
         if (level instanceof ServerLevel && level.getBlockEntity(posCofre) instanceof RandomizableContainerBlockEntity cofre) {
             cofre.setLootTable(BuiltInLootTables.VILLAGE_PLAINS_HOUSE, random.nextLong());
         }
 
-        // Mesa
-        // Va en yCofre+2 para quedar visible al lado del cofre
+        // Mesa de trabajo en yCofre+2 para quedar visible al lado del cofre
         BlockPos posMesa = new BlockPos(origen.getX() + 4, yMesa + 1, origen.getZ() + 2);
         level.setBlock(posMesa, mesa, 3);
 
-        // Hoguera
-        // Se coloca fuera de la carpa (z+6) para dar efecto de fogón exterior.
-        // Busca su propio suelo con buscarYSuelo — si no lo encuentra, se omite.
+        // Hoguera exterior al sur de la carpa (Z+6), busca su propio suelo
         int yHoguera = buscarYSuelo(level, origen.getX() + 3, origen.getZ() + 6, origenY);
         if (yHoguera != -1) {
             level.setBlock(new BlockPos(origen.getX() + 3, yHoguera, origen.getZ() + 6),
                     Blocks.CAMPFIRE.defaultBlockState(), 3);
         }
 
-        System.out.println("[Structure] Carpa CHICA colocada en " + origen);
+        //System.out.println("[CampamentoStructure] Carpa CHICA colocada en + origen);
         return new PlaceResult(posMesa, posCabecera);
     }
 
-    //
+
     // CARPA GRANDE 11×11
     // Misma lógica que la chica pero escalada:
     //   - Área 11×11, centro en (5,5)
     //   - Lona más alta (pico en yCentro + 10)
     //   - 2 camas (NW y NE), 2 cofres (SW y SE), mesa al centro
     //   - 4 postes de esquina en [2][2], [8][2], [2][8], [8][8]
-    //
+
+
+    /**
+     * Construye la variante grande de la carpa (11×11 bloques).
+     *
+     * <p>Aplica las mismas validaciones que {@link #placeChica} pero sobre el área
+     * 11×11 y con una altura de lona mayor (pico en {@code yCentro + 10}).
+     * Incluye 2 camas (NW y NE), 2 cofres (SW y SE) y 1 mesa al centro.
+     *
+     * <p>Se devuelve la cabecera de la primera cama como {@code HOME} del aldeano
+     * principal (solo se spawnea 1 aldeano por entrada según {@code CampamentoPlacer}).
+     *
+     * @param level  el nivel donde construir
+     * @param origen esquina NW del área 11×11
+     * @param random fuente de aleatoriedad
+     * @return {@link PlaceResult} o {@code null} si alguna validación falla
+     */
     private static PlaceResult placeGrande(LevelAccessor level, BlockPos origen, RandomSource random) {
 
         int A = 11, C = 5; // ancho total y posición del centro
@@ -360,7 +473,7 @@ public class CampamentoStructure {
                     || !sv.isLoaded(origen.offset(10, 0, 0))
                     || !sv.isLoaded(origen.offset(0, 0, 10))
                     || !sv.isLoaded(origen.offset(10, 0, 10))) {
-                System.out.println("[Structure] Chunk no cargado, cancelando carpa grande");
+                //System.out.println("[CampamentoStructure] Chunk no cargado, cancelando carpa grande");
                 return null;
             }
         }
@@ -369,14 +482,14 @@ public class CampamentoStructure {
         BlockState mesa = MESAS[random.nextInt(MESAS.length)];
         BlockState cama = CAMAS[random.nextInt(CAMAS.length)];
 
-        // Detectar obstáculos — mismo criterio que la chica pero en el área 11×11 × 13 alto
+        // Detectar obstáculos en el área 11×11 × 13 bloques de alto
         for (int x = 0; x < A; x++) {
             for (int z = 0; z < A; z++) {
                 for (int dy = -1; dy <= 12; dy++) {
                     BlockState b = level.getBlockState(
                             new BlockPos(origen.getX() + x, origenY + dy, origen.getZ() + z));
                     if (esObstaculo(b)) {
-                        System.out.println("[Structure] Obstáculo en carpa grande, cancelando");
+                        //System.out.println("[CampamentoStructure] Obstáculo en carpa grande, cancelando");
                         return null;
                     }
                 }
@@ -386,6 +499,7 @@ public class CampamentoStructure {
         // Mapa de Y del piso (índices 1..9 en la matriz 11×11)
         int[][] yPiso = new int[A][A];
         int tablonesValidos = 0, tablonesTotal = 0;
+
         for (int x = 1; x < A - 1; x++) {
             for (int z = 1; z < A - 1; z++) {
                 int y = buscarYSuelo(level, origen.getX() + x, origen.getZ() + z, origenY);
@@ -398,7 +512,7 @@ public class CampamentoStructure {
         }
 
         if (tablonesValidos < tablonesTotal / 2) {
-            System.out.println("[Structure] Terreno muy irregular, cancelando carpa grande");
+            //System.out.println("[CampamentoStructure] Terreno muy irregular, cancelando carpa grande");
             return null;
         }
 
@@ -408,12 +522,12 @@ public class CampamentoStructure {
             for (int z = 1; z < A - 1; z++)
                 if (yPiso[x][z] != -1) niveles.add(yPiso[x][z]);
         if (niveles.size() > 2) {
-            System.out.println("[Structure] Piso fragmentado, cancelando carpa grande");
+            //System.out.println("[CampamentoStructure] Piso fragmentado, cancelando carpa grande");
             return null;
         }
 
         // Verificar suelo bajo el mobiliario
-        // Los postes de esquina están en X=2/8, Z=2/8 — el mobiliario se desplaza a X=3/6
+        // Los postes de esquina están en X=2/8, Z=2/8 el mobiliario se desplaza a X=3/6
         // para que nunca quede bajo un poste y ambos se vean correctamente.
         int yCama1  = buscarYSuelo(level, origen.getX() + 3, origen.getZ() + 2, origenY);
         int yCama2  = buscarYSuelo(level, origen.getX() + 6, origen.getZ() + 2, origenY);
@@ -422,11 +536,11 @@ public class CampamentoStructure {
         int yMesa   = buscarYSuelo(level, origen.getX() + C, origen.getZ() + C, origenY);
 
         if (yCama1 == -1 || yCama2 == -1 || yCofre1 == -1 || yCofre2 == -1 || yMesa == -1) {
-            System.out.println("[Structure] Sin suelo para mobiliario grande, cancelando");
+            //System.out.println("[CampamentoStructure] Sin suelo para mobiliario grande, cancelando");
             return null;
         }
 
-        // Piso — tablones siguen el terreno igual que en la chica
+        // Piso tablones siguen el terreno igual que en la chica
         for (int x = 1; x < A - 1; x++) {
             for (int z = 1; z < A - 1; z++) {
                 int y = yPiso[x][z];
@@ -436,7 +550,7 @@ public class CampamentoStructure {
             }
         }
 
-        // Postes — 1 central + 4 de esquina interior
+        // Postes 1 central + 4 de esquina interior
         // El pico de la lona está 10 bloques sobre el centro (vs 7 en la chica).
         // Las esquinas del radio 5 tocan la lona en yLonaTop - 5.
         int yCentro      = yPiso[C][C] != -1 ? yPiso[C][C] : origenY;
@@ -455,7 +569,7 @@ public class CampamentoStructure {
                     Math.max(1, yLonaEsquina - yE));
         }
 
-        // Lona — pirámide Chebyshev centrada en (C, C), igual que la chica pero más grande
+        // Lona pirámide Chebyshev centrada en (C, C), igual que la chica pero más grande
         for (int x = 0; x < A; x++) {
             for (int z = 0; z < A; z++) {
                 int dist   = Math.max(Math.abs(x - C), Math.abs(z - C));
@@ -476,7 +590,7 @@ public class CampamentoStructure {
                 cama.setValue(BlockStateProperties.BED_PART, BedPart.HEAD)
                         .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH), 3);
 
-        // Cama 2 (esquina NE) — color distinto para diferenciarlas visualmente
+        // Cama 2 (esquina NE) color distinto para diferenciarlas visualmente
         BlockState cama2 = CAMAS[random.nextInt(CAMAS.length)];
         BlockPos pie2 = new BlockPos(origen.getX() + 6, yCama2 + 1, origen.getZ() + 2);
         BlockPos cab2 = new BlockPos(origen.getX() + 6, yCama2 + 1, origen.getZ() + 3);
@@ -487,8 +601,7 @@ public class CampamentoStructure {
                 cama2.setValue(BlockStateProperties.BED_PART, BedPart.HEAD)
                         .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH), 3);
 
-        // Cofre 1 (esquina SW)
-        // Asignamos loot table de casa de aldea, igual que en la chica
+        // Cofre 1 (esquina SW) con loot table de aldea
         BlockPos posCofre1 = new BlockPos(origen.getX() + 3, yCofre1 + 1, origen.getZ() + 8);
         level.setBlock(posCofre1, Blocks.CHEST.defaultBlockState(), 3);
         if (level instanceof ServerLevel && level.getBlockEntity(posCofre1) instanceof RandomizableContainerBlockEntity c) {
@@ -502,26 +615,34 @@ public class CampamentoStructure {
             c.setLootTable(BuiltInLootTables.VILLAGE_PLAINS_HOUSE, random.nextLong());
         }
 
-        // Mesa — al centro de la carpa, junto a la hoguera
+        // Mesa al centro de la carpa
         BlockPos posMesa = new BlockPos(origen.getX() + C, yMesa + 1, origen.getZ() + C);
         level.setBlock(posMesa, mesa, 3);
 
-        // Hoguera — fuera de la carpa al sur, misma lógica que la chica
+        // Hoguera exterior al sur misma lógica que en la chica
         int yHoguera = buscarYSuelo(level, origen.getX() + C, origen.getZ() + 10, origenY);
         if (yHoguera != -1) {
             level.setBlock(new BlockPos(origen.getX() + C, yHoguera, origen.getZ() + 10),
                     Blocks.CAMPFIRE.defaultBlockState(), 3);
         }
 
-        System.out.println("[Structure] Carpa GRANDE colocada en " + origen);
+        //System.out.println("[CampamentoStructure] Carpa GRANDE colocada en + origen);
         // Devolvemos cab1 como HOME del aldeano principal (CampamentoPlacer spawnea 1 por entrada)
         return new PlaceResult(posMesa, cab1);
     }
 
-    // Coloca un poste de OAK_LOG desde el suelo sólido más cercano hacia arriba,
-    // hasta base.getY() + alturaPoste. Solo reemplaza aire y vegetación
-    // nunca sobreescribe bloques sólidos ni estructuras existentes.
-    // Si no encuentra suelo en 5 bloques hacia abajo, no coloca nada.
+    /**
+     * Coloca una columna de {@link Blocks#OAK_LOG} desde el suelo sólido más cercano
+     * hacia arriba, hasta {@code base.getY() + alturaPoste}.
+     *
+     * <p>Solo reemplaza bloques que pasen el filtro {@link #esReemplazable}; nunca
+     * sobreescribe bloques sólidos ni estructuras existentes. Si no encuentra suelo
+     * en los 5 bloques inferiores a {@code base}, no coloca nada.
+     *
+     * @param level        el nivel donde colocar el poste
+     * @param base         posición base del poste (el tronco arranca encima del suelo)
+     * @param alturaPoste  número de troncos a colocar hacia arriba; si es ≤0, no ocurre nada
+     */
     private static void colocarPoste(LevelAccessor level, BlockPos base, int alturaPoste) {
         if (alturaPoste <= 0) return;
 
