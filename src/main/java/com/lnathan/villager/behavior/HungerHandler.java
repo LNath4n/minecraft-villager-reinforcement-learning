@@ -16,86 +16,83 @@ import net.minecraft.world.entity.npc.villager.VillagerProfession;
 import java.util.Optional;
 
 /**
- * Gestiona el sistema de hambre del aldeano y sus consecuencias de comportamiento.
+ * Manages the villager's hunger system and its behavioral consequences.
  *
- * <p>Cuando {@link Villager#wantsMoreFood()} devuelve {@code true}, este handler:
+ * <p>When {@link Villager#wantsMoreFood()} returns {@code true}, this handler:</p>
  * <ul>
- *   <li>Aplica un modificador de velocidad de {@code -0.4} (reducción del 40%) para
- *       reflejar visualmente el estado de hambre.</li>
- *   <li>Cada 200 ticks (con offset aleatorio para distribuir la carga entre aldeanos),
- *       decide la acción de recuperación según la profesión:
+ *   <li>Applies a {@code -0.4} movement speed modifier (a 40% reduction) to visually
+ *       reflect the hungry state.</li>
+ *   <li>Every 200 ticks (with a random per-villager offset to spread CPU load),
+ *       decides the recovery action based on the villager's profession:
  *     <ul>
- *       <li><b>Cartógrafo hambriento:</b> intenta iniciar una migración hacia la
- *           campana de otra aldea mediante {@link MigrationHandler}.</li>
- *       <li><b>Otros aldeanos:</b> navegan a su {@link MemoryModuleType#JOB_SITE}
- *           (donde el ciclo de trabajo puede proporcionarles comida).</li>
+ *       <li><b>Hungry cartographer:</b> attempts to start a migration toward another
+ *           village's bell via {@link MigrationHandler}.</li>
+ *       <li><b>Other villagers:</b> navigate to their {@link MemoryModuleType#JOB_SITE},
+ *           where the work cycle can provide them with food.</li>
  *     </ul>
  *   </li>
- *   <li>Cuando el hambre se resuelve, elimina el modificador de velocidad y restaura
- *       el estado a {@link VillagerState#NORMAL}.</li>
+ *   <li>When hunger is resolved, removes the speed modifier and restores the villager's
+ *       state to {@link VillagerState#NORMAL}.</li>
  * </ul>
  *
- * <p>El modificador de velocidad solo se aplica/elimina cuando el estado de hambre
- * <em>cambia</em> (no cada tick) para minimizar el overhead de atributos.
+ * <p>The speed modifier is only applied/removed when the hunger state <em>changes</em>
+ * (not every tick) to minimize attribute overhead.</p>
  *
  * @see MigrationHandler
  */
 public class HungerHandler {
 
     /**
-     * Identificador del modificador de atributo de velocidad por hambre.
-     * Usar un {@link Identifier} fijo garantiza que siempre se aplica y elimina
-     * el mismo modificador sin duplicados.
+     * Identifier for the hunger-induced movement speed attribute modifier.
+     * Using a fixed {@link Identifier} ensures the same modifier is always applied and
+     * removed without duplicates.
      */
     private static final Identifier HUNGER_SLOW_ID =
             Identifier.fromNamespaceAndPath("mod", "hunger_slow");
 
     /**
-     * Caché del estado de hambre previo. Evita modificar el atributo de velocidad
-     * en cada tick; solo actúa cuando el estado cambia de {@code false} a {@code true}
-     * o viceversa.
+     * Cached hunger state from the previous tick. Prevents modifying the speed attribute
+     * every tick; only acts when the state transitions from {@code false} to {@code true}
+     * or vice versa.
      */
     private boolean wasHungry = false;
 
     /**
-     * Offset aleatorio de tick para este aldeano concreto, inicializado en el primer
-     * tick con hambre. Distribuye la evaluación periódica entre todos los aldeanos
-     * del mundo para evitar picos de CPU en el mismo tick.
-     * {@code -1} indica que aún no ha sido inicializado.
+     * Random tick offset for this specific villager, initialized on the first hungry tick.
+     * Spreads periodic evaluation across all villagers in the world to avoid CPU spikes
+     * on the same tick. {@code -1} indicates it has not been initialized yet.
      */
     private int hungerOffset = -1;
 
     /**
-     * Referencia al handler de migración del cartógrafo. Se consulta para comprobar
-     * el cooldown y para iniciar la migración si corresponde.
+     * Reference to the cartographer migration handler shared with this villager.
+     * Consulted to check the migration cooldown and to start a migration when appropriate.
      */
     private final MigrationHandler migrationHandler;
 
     /**
-     * Construye un nuevo {@code HungerHandler} enlazado al {@link MigrationHandler}
-     * del mismo aldeano.
+     * Constructs a new {@code HungerHandler} linked to the given {@link MigrationHandler}.
      *
-     * @param migrationHandler el handler de migración compartido con este aldeano
+     * @param migrationHandler the migration handler shared with this villager
      */
     public HungerHandler(MigrationHandler migrationHandler) {
         this.migrationHandler = migrationHandler;
     }
 
     /**
-     * Punto de entrada del tick. Evalúa el estado de hambre, actualiza el modificador
-     * de velocidad si es necesario, y cada 200 ticks dispara la acción de recuperación
-     * apropiada para la profesión del aldeano.
+     * Tick entry point. Evaluates the hunger state, updates the speed modifier if needed,
+     * and every 200 ticks triggers the appropriate recovery action for the villager's profession.
      *
-     * <p>No actúa si el aldeano está en estado {@link VillagerState#CARTOGRAPHER_MIGRATING}
-     * para no interrumpir una migración en curso.
+     * <p>Does nothing if the villager is in state {@link VillagerState#CARTOGRAPHER_MIGRATING}
+     * to avoid interrupting an ongoing migration.</p>
      *
-     * @param self  el aldeano
-     * @param level el nivel de servidor donde reside el aldeano
+     * @param self  the villager
+     * @param level the server level where the villager resides
      */
     public void tick(Villager self, ServerLevel level) {
         boolean hungry = self.wantsMoreFood();
 
-        // Solo modificamos el atributo cuando cambia el estado — no cada tick
+        // Only modify the attribute when the state changes — not every tick
         if (hungry != wasHungry) {
             wasHungry = hungry;
             AttributeInstance speedAttr = self.getAttribute(Attributes.MOVEMENT_SPEED);
@@ -113,7 +110,7 @@ public class HungerHandler {
 
         if (!hungry) return;
 
-        // Offset aleatorio para que cada aldeano evalúe en un tick distinto
+        // Random offset so each villager evaluates on a different tick
         if (hungerOffset == -1) hungerOffset = self.getRandom().nextInt(200);
         if ((self.tickCount + hungerOffset) % 200 != 0) return;
 
@@ -130,22 +127,22 @@ public class HungerHandler {
     }
 
     /**
-     * Intenta iniciar la migración del cartógrafo hacia otra aldea.
+     * Attempts to start the cartographer's migration toward another village.
      *
-     * <p>Condiciones para que la migración se inicie:
+     * <p>Conditions required for migration to begin:</p>
      * <ol>
-     *   <li>El cooldown de migración debe haber expirado.</li>
-     *   <li>Debe existir un POI de tipo {@code VILLAGE} a más de 100 bloques de
-     *       distancia que no sea la campana actual del cartógrafo.</li>
+     *   <li>The migration cooldown must have expired.</li>
+     *   <li>A POI of type {@code VILLAGE} must exist more than 100 blocks away that is
+     *       not the cartographer's current meeting point (bell).</li>
      * </ol>
      *
-     * <p>Si se encuentra un objetivo válido, se limpian las memorias
-     * {@link MemoryModuleType#MEETING_POINT} y {@link MemoryModuleType#WALK_TARGET}
-     * para que el Brain no interfiera, y el estado del aldeano cambia a
-     * {@link VillagerState#CARTOGRAPHER_MIGRATING}.
+     * <p>If a valid target is found, the {@link MemoryModuleType#MEETING_POINT} and
+     * {@link MemoryModuleType#WALK_TARGET} memories are erased so the Brain does not
+     * interfere, and the villager's state is set to
+     * {@link VillagerState#CARTOGRAPHER_MIGRATING}.</p>
      *
-     * @param self  el aldeano cartógrafo
-     * @param level el nivel de servidor
+     * @param self  the cartographer villager
+     * @param level the server level
      */
     private void tryStartMigration(Villager self, ServerLevel level) {
         if (self.level().getGameTime() < migrationHandler.getMigrationCooldownUntil()) return;
@@ -170,18 +167,17 @@ public class HungerHandler {
             self.getBrain().eraseMemory(MemoryModuleType.MEETING_POINT);
             self.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
             ((VillagerDataSync) self).setVillagerState(VillagerState.CARTOGRAPHER_MIGRATING);
-            //System.out.println("[HungerHandle] Cartógrafo va a otra aldea: " + bellPos);
         });
     }
 
     /**
-     * Envía al aldeano hambriento (no cartógrafo) hacia su sitio de trabajo registrado
-     * en la memoria {@link MemoryModuleType#JOB_SITE}.
+     * Sends a hungry non-cartographer villager toward its registered job site, stored
+     * in the {@link MemoryModuleType#JOB_SITE} memory.
      *
-     * <p>El sitio de trabajo es donde el ciclo de profesión puede proporcionarle comida.
-     * Si la memoria no existe (aldeano sin profesión), no ocurre ningún movimiento.
+     * <p>The job site is where the profession cycle can supply the villager with food.
+     * If the memory does not exist (villager has no profession), no movement is issued.</p>
      *
-     * @param self el aldeano hambriento
+     * @param self the hungry villager
      */
     private void navigateToJobSite(Villager self) {
         ((VillagerDataSync) self).setVillagerState(VillagerState.HUNGRY);
@@ -189,7 +185,6 @@ public class HungerHandler {
             self.getNavigation().moveTo(
                     pos.pos().getX(), pos.pos().getY(), pos.pos().getZ(), 0.5f
             );
-            //System.out.println("[HungerHandle] Aldeano hambriento va a su trabajo: " + pos.pos());
         });
     }
 }

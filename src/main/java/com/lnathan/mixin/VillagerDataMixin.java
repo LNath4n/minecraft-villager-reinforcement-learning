@@ -13,47 +13,46 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Mixin que añade un canal de datos sincronizado servidor→cliente a {@link Villager}.
+ * Mixin that adds a server→client synchronised data channel to {@link Villager}.
  *
- * <p>Implementa {@link VillagerDataSync} para exponer el estado del aldeano
- * ({@link VillagerState}) a través de {@link SynchedEntityData}, el mecanismo
- * estándar de Minecraft para propagar datos de entidad a todos los clientes
- * conectados automáticamente.
+ * <p>Implements {@link VillagerDataSync} to expose the villager's state
+ * ({@link VillagerState}) through {@link SynchedEntityData}, Minecraft's standard
+ * mechanism for propagating entity data to all connected clients automatically.
  *
- * <p>El canal se serializa como {@code String} (nombre del enum) para evitar
- * registrar un {@link net.minecraft.network.syncher.EntityDataSerializer} personalizado,
- * lo que simplifica la compatibilidad con otros mods.
+ * <p>The channel is serialised as a {@code String} (enum name) to avoid
+ * registering a custom {@link net.minecraft.network.syncher.EntityDataSerializer},
+ * which simplifies compatibility with other mods.
  *
- * <h3>Responsabilidades</h3>
+ * <h3>Responsibilities</h3>
  * <ul>
- *   <li>Registrar el campo {@link #VILLAGER_STATE} en {@code defineSynchedData}.</li>
- *   <li>Exponer {@link #getVillagerState()} y {@link #setVillagerState(VillagerState)}
- *       para que {@code VillagerMixin} y los handlers puedan leer y escribir el estado.</li>
+ *   <li>Register the {@link #VILLAGER_STATE} field in {@code defineSynchedData}.</li>
+ *   <li>Expose {@link #getVillagerState()} and {@link #setVillagerState(VillagerState)}
+ *       so that {@code VillagerMixin} and event handlers can read and write the state.</li>
  * </ul>
  */
 @Mixin(Villager.class)
 public class VillagerDataMixin implements VillagerDataSync {
 
     /**
-     * Canal de sincronización servidor→cliente para el estado del aldeano.
-     * Se define como {@code static} y {@code @Unique} para que Mixin no lo
-     * confunda con campos de la clase base. El valor por defecto es
-     * {@link VillagerState#NORMAL#name()}.
+     * Server→client synchronisation channel for the villager state.
+     * Declared {@code static} and {@code @Unique} so Mixin does not confuse it
+     * with a field from the base class. The default value is
+     * {@link VillagerState#NORMAL}{@code .name()}.
      */
     @Unique
     private static final EntityDataAccessor<String> VILLAGER_STATE =
             SynchedEntityData.defineId(Villager.class, EntityDataSerializers.STRING);
 
     /**
-     * Inyectado al final de {@code Villager#defineSynchedData} para registrar
-     * {@link #VILLAGER_STATE} en el builder antes de que se construya el
-     * {@code SynchedEntityData} definitivo.
+     * Injected at the end of {@code Villager#defineSynchedData} to register
+     * {@link #VILLAGER_STATE} in the builder before the final
+     * {@code SynchedEntityData} instance is constructed.
      *
-     * <p>La inyección en {@code TAIL} garantiza que el campo del mod se añade
-     * después de todos los campos vanilla, evitando conflictos de ID.
+     * <p>Injecting at {@code TAIL} guarantees that the mod field is added after
+     * all vanilla fields, preventing ID conflicts.
      *
-     * @param builder el builder de datos sincronizados proporcionado por Minecraft
-     * @param ci      callback de Mixin
+     * @param builder the synched-data builder provided by Minecraft
+     * @param ci      Mixin callback (unused)
      */
     @Inject(at = @At("TAIL"), method = "defineSynchedData")
     private void addSynchedData(SynchedEntityData.Builder builder, CallbackInfo ci) {
@@ -61,13 +60,13 @@ public class VillagerDataMixin implements VillagerDataSync {
     }
 
     /**
-     * Hook en {@code customServerAiStep} reservado para sincronizaciones adicionales
-     * por tick si fueran necesarias en el futuro. Actualmente vacío porque
-     * {@link #setVillagerState(VillagerState)} escribe directamente en el canal
-     * desde los handlers.
+     * Hook in {@code customServerAiStep} reserved for additional per-tick
+     * synchronisation if needed in the future. Currently a no-op because
+     * {@link #setVillagerState(VillagerState)} writes directly to the channel
+     * from the event handlers.
      *
-     * @param level nivel de servidor del tick actual
-     * @param ci    callback de Mixin
+     * @param level the server level of the current tick
+     * @param ci    Mixin callback (unused)
      */
     @Inject(at = @At("TAIL"), method = "customServerAiStep")
     private void syncState(net.minecraft.server.level.ServerLevel level, CallbackInfo ci) {
@@ -75,11 +74,12 @@ public class VillagerDataMixin implements VillagerDataSync {
     }
 
     /**
-     * Lee el estado actual del canal sincronizado y lo convierte al enum correspondiente.
+     * Reads the current state from the synchronised channel and converts it to
+     * the corresponding enum constant.
      *
-     * @return estado actual del aldeano; nunca {@code null}
-     * @throws IllegalArgumentException si el valor almacenado no corresponde a ningún valor de {@link VillagerState}
-     *
+     * @return the current villager state; never {@code null}
+     * @throws IllegalArgumentException if the stored value does not match any
+     *                                  constant of {@link VillagerState}
      */
     @Override
     public VillagerState getVillagerState() {
@@ -88,11 +88,10 @@ public class VillagerDataMixin implements VillagerDataSync {
     }
 
     /**
-     * Escribe el nuevo estado en el canal sincronizado.
-     * El cambio se propagará automáticamente a los clientes en el siguiente
-     * paquete de sincronización de entidad.
+     * Writes a new state to the synchronised channel. The change will be
+     * propagated automatically to all clients in the next entity sync packet.
      *
-     * @param state el estado a almacenar; no debe ser {@code null}
+     * @param state the state to store; must not be {@code null}
      */
     @Override
     public void setVillagerState(VillagerState state) {

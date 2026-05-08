@@ -7,7 +7,12 @@
 		"VillagerMixin",
 		"VillagerDataMixin",
 		"VillagerRenderStateMixin",
-		"VillagerRendererMixin"
+		"VillagerRendererMixin",
+		"ServerPlayerMixin"
+	],
+	"client": [
+		"client.CameraMixin",
+		"client.CameraAccessor"
 	],
 	"injectors": {
 		"defaultRequire": 1

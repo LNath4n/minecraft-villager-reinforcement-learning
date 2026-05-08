@@ -7,25 +7,26 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 
 /**
- * Mixin que añade el campo {@link VillagerState} al {@link VillagerRenderState}
- * de Minecraft e implementa {@link VillagerRenderStateAccessor} para exponerlo.
+ * Mixin that adds a {@link VillagerState} field to Minecraft's
+ * {@link VillagerRenderState} and implements {@link VillagerRenderStateAccessor}
+ * to expose it.
  *
- * <p>{@code VillagerRenderState} es una clase de datos inmutable que Minecraft
- * crea cada frame para aislar el render del hilo principal. Como no podemos
- * modificar esa clase directamente, usamos Mixin para añadirle el campo
- * {@link #villagerState} que {@code HungryVillagerLayer} necesita leer.
+ * <p>{@code VillagerRenderState} is an immutable data class that Minecraft
+ * recreates every frame to isolate rendering from the main thread. Since the
+ * class cannot be modified directly, this Mixin injects the {@link #villagerState}
+ * field that {@code HungryVillagerLayer} needs to read during rendering.
  *
- * <p>El valor por defecto es {@link VillagerState#NORMAL} para que, en el
- * primer frame antes de que {@code VillagerRendererMixin} copie el estado,
- * no se muestre ningún icono incorrecto.
+ * <p>The default value is {@link VillagerState#NORMAL} so that, on the first
+ * frame before {@code VillagerRendererMixin} has copied the state, no incorrect
+ * icon is displayed.
  */
 @Mixin(VillagerRenderState.class)
 public class VillagerRenderStateMixin implements VillagerRenderStateAccessor {
 
     /**
-     * Estado del aldeano para el frame actual. Copiado desde la entidad por
-     * {@code VillagerRendererMixin#extractState} una vez por frame.
-     * Valor por defecto: {@link VillagerState#NORMAL}.
+     * Villager state for the current frame. Copied from the entity by
+     * {@code VillagerRendererMixin#extractState} once per frame.
+     * Default value: {@link VillagerState#NORMAL}.
      */
     @Unique
     public VillagerState villagerState = VillagerState.NORMAL;
@@ -33,7 +34,7 @@ public class VillagerRenderStateMixin implements VillagerRenderStateAccessor {
     /**
      * {@inheritDoc}
      *
-     * @return el estado almacenado para este frame; nunca {@code null}
+     * @return the state stored for this frame; never {@code null}
      */
     @Override
     public VillagerState getVillagerState() { return this.villagerState; }
@@ -41,7 +42,7 @@ public class VillagerRenderStateMixin implements VillagerRenderStateAccessor {
     /**
      * {@inheritDoc}
      *
-     * @param state el estado a almacenar para este frame
+     * @param state the state to store for this frame; must not be {@code null}
      */
     @Override
     public void setVillagerState(VillagerState state) { this.villagerState = state; }

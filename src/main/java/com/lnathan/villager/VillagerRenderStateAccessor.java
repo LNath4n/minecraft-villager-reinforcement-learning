@@ -1,38 +1,36 @@
 package com.lnathan.villager;
 
 /**
- * Interfaz de acceso al estado del aldeano en el lado cliente.
+ * Access interface for the villager's state on the client side.
  *
- * <p>Implementada por {@code VillagerRenderStateMixin}, que la inyecta en
+ * <p>Implemented by {@code VillagerRenderStateMixin}, which injects it into
  * {@link net.minecraft.client.renderer.entity.state.VillagerRenderState}.
- * Permite que {@code HungryVillagerLayer} lea el estado del aldeano durante
- * el renderizado sin acceder directamente a la entidad servidora ni a sus
- * datos sincronizados.
+ * Allows {@code HungryVillagerLayer} to read the villager's state during
+ * rendering without accessing the server-side entity or its synchronized data directly.
  *
- * <p>El estado se copia desde la entidad al {@code RenderState} una vez
- * por frame en {@code VillagerRendererMixin#extractState}, siguiendo el
- * patrón estándar de Minecraft 1.21+ de separar datos de entidad y datos
- * de renderizado.
+ * <p>The state is copied from the entity into the {@code RenderState} once
+ * per frame in {@code VillagerRendererMixin#extractState}, following the
+ * standard Minecraft 1.21+ pattern of separating entity data from render data.
  *
- * @see VillagerDataSync contraparte en el lado servidor
- * @see VillagerState valores posibles del estado
+ * @see VillagerDataSync counterpart on the server side
+ * @see VillagerState possible state values
  */
 public interface VillagerRenderStateAccessor {
 
     /**
-     * Devuelve el estado del aldeano que fue copiado desde la entidad
-     * durante la última llamada a {@code extractRenderState}.
+     * Returns the villager state that was copied from the entity
+     * during the last call to {@code extractRenderState}.
      *
-     * @return estado actual en el render state; nunca {@code null}
+     * @return the current state in the render state; never {@code null}
      */
     VillagerState getVillagerState();
 
     /**
-     * Escribe el estado en el render state. Solo debe llamarse desde
-     * {@code VillagerRendererMixin#extractState} durante la preparación
-     * del frame, nunca desde la lógica de renderizado propiamente dicha.
+     * Writes the state into the render state. Must only be called from
+     * {@code VillagerRendererMixin#extractState} during frame preparation,
+     * never from rendering logic itself.
      *
-     * @param state el estado a almacenar; no debe ser {@code null}
+     * @param state the state to store; must not be {@code null}
      */
     void setVillagerState(VillagerState state);
 }

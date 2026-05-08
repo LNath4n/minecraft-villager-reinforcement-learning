@@ -12,30 +12,30 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Gestiona la recogida automática de ítems del suelo hacia el inventario del aldeano.
+ * Handles automatic pickup of ground items into the villager's inventory.
  *
- * <p>El handler evalúa el estado del inventario y el entorno cada 40 ticks (2 segundos)
- * para no saturar la búsqueda de entidades. El ciclo de decisión es el siguiente:
+ * <p>The handler evaluates the inventory state and surroundings every 40 ticks (2 seconds)
+ * to avoid flooding the entity search. The decision cycle is as follows:
  * <ol>
- *   <li>Si hay un depósito activo en {@link DepositHandler}, se salta completamente
- *       para no interferir con la navegación hacia el cofre.</li>
- *   <li>Si el inventario está lleno, llama a {@link DepositHandler#findNearbyChest}
- *       para vaciar un slot antes de seguir recogiendo.</li>
- *   <li>Si hay espacio, busca el ítem recogible más cercano dentro de 8 bloques,
- *       navega hacia él y lo recoge al llegar a ≤2.5 bloques de distancia.</li>
+ *   <li>If there is an active deposit in {@link DepositHandler}, it is skipped entirely
+ *       to avoid interfering with navigation toward the chest.</li>
+ *   <li>If the inventory is full, calls {@link DepositHandler#findNearbyChest}
+ *       to free up a slot before continuing to pick up items.</li>
+ *   <li>If there is space, searches for the nearest pickable item within 8 blocks,
+ *       navigates toward it, and picks it up upon reaching ≤2.5 blocks distance.</li>
  * </ol>
  *
- * <p>Solo se recogen los ítems definidos en {@link #PICKUP_ITEMS}. El conjunto puede
- * ampliarse para soportar más recursos sin modificar la lógica del handler.
+ * <p>Only items defined in {@link #PICKUP_ITEMS} are collected. The set can be
+ * expanded to support more resources without modifying the handler's logic.
  *
  * @see DepositHandler
  */
 public class PickupHandler {
 
     /**
-     * Conjunto de ítems que el aldeano puede y quiere recoger del suelo.
-     * La búsqueda de entidades filtra únicamente por estos tipos para evitar
-     * recoger ítems irrelevantes (herramientas rotas, flechas, etc.).
+     * Set of items that the villager can and wants to pick up from the ground.
+     * The entity search filters exclusively by these types to avoid
+     * picking up irrelevant items (broken tools, arrows, etc.).
      */
     public static final Set<Item> PICKUP_ITEMS = Set.of(
             Items.OAK_LOG,
@@ -46,35 +46,35 @@ public class PickupHandler {
     );
 
     /**
-     * Ticks restantes hasta la próxima evaluación del handler.
-     * Cada evaluación resetea este contador a 40 (2 segundos a 20 TPS).
+     * Ticks remaining until the next handler evaluation.
+     * Each evaluation resets this counter to 40 (2 seconds at 20 TPS).
      */
     private int pickupCooldown = 0;
 
     /**
-     * Referencia al handler de depósito. Se consulta para saber si hay un depósito
-     * activo y para iniciar el vaciado del inventario cuando está lleno.
+     * Reference to the deposit handler. Consulted to check whether a deposit
+     * is active and to initiate inventory emptying when the inventory is full.
      */
     private final DepositHandler depositHandler;
 
     /**
-     * Construye un nuevo {@code PickupHandler} enlazado al {@link DepositHandler}
-     * del mismo aldeano.
+     * Constructs a new {@code PickupHandler} linked to the {@link DepositHandler}
+     * of the same villager.
      *
-     * @param depositHandler el handler de depósito compartido con este aldeano
+     * @param depositHandler the deposit handler shared with this villager
      */
     public PickupHandler(DepositHandler depositHandler) {
         this.depositHandler = depositHandler;
     }
 
     /**
-     * Punto de entrada del tick. Evalúa cada 40 ticks el estado del inventario
-     * y del entorno y decide si recoger, depositar o esperar.
+     * Tick entry point. Evaluates the inventory state and surroundings every
+     * 40 ticks and decides whether to pick up, deposit, or wait.
      *
-     * @param self      el aldeano
-     * @param level     el nivel de servidor donde se buscan las entidades de ítem
-     * @param inventory el inventario simple del aldeano (generalmente {@link SimpleContainer}
-     *                  de 8 slots gestionado por el Mixin)
+     * @param self      the villager
+     * @param level     the server level where item entities are searched
+     * @param inventory the villager's simple inventory (typically a {@link SimpleContainer}
+     *                  of 8 slots managed by the Mixin)
      */
     public void tick(Villager self, ServerLevel level, SimpleContainer inventory) {
         if (pickupCooldown > 0) {
@@ -83,7 +83,7 @@ public class PickupHandler {
         }
         pickupCooldown = 40;
 
-        // Si ya hay un depósito en curso, no interferimos
+        // If a deposit is already in progress, do not interfere
         if (depositHandler.hasPendingDeposit()) return;
 
         boolean inventoryFull = isInventoryFull(inventory);
@@ -97,32 +97,32 @@ public class PickupHandler {
     }
 
     /**
-     * Comprueba si todos los slots del inventario están ocupados.
+     * Checks whether all inventory slots are occupied.
      *
-     * @param inventory el inventario a examinar
-     * @return {@code true} si no queda ningún slot vacío
+     * @param inventory the inventory to examine
+     * @return {@code true} if no empty slot remains
      */
     private boolean isInventoryFull(SimpleContainer inventory) {
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
+        for (int i = 8; i < inventory.getContainerSize(); i++) {
             if (inventory.getItem(i).isEmpty()) return false;
         }
         return true;
     }
 
     /**
-     * Intenta vaciar un único slot del inventario hacia un cofre cercano.
+     * Attempts to empty a single inventory slot into a nearby chest.
      *
-     * <p>Se procesa solo el primer slot no vacío encontrado por ciclo para evitar
-     * saturar el {@link DepositHandler} con múltiples destinos simultáneos.
-     * Si no hay cofre disponible, no ocurre ningún movimiento y se espera al
-     * siguiente ciclo de 40 ticks.
+     * <p>Only the first non-empty slot found per cycle is processed to avoid
+     * flooding the {@link DepositHandler} with multiple simultaneous destinations.
+     * If no chest is available, no movement occurs and the handler waits until
+     * the next 40-tick cycle.
      *
-     * @param self      el aldeano
-     * @param level     el nivel de servidor
-     * @param inventory el inventario del aldeano
+     * @param self      the villager
+     * @param level     the server level
+     * @param inventory the villager's inventory
      */
     private void tryEmptyOneSlot(Villager self, ServerLevel level, SimpleContainer inventory) {
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
+        for (int i = 8; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
 
@@ -133,23 +133,23 @@ public class PickupHandler {
             } else {
                 //System.out.println("[PickupHandler Inventario] Lleno pero no hay cofre cercano, esperando...");
             }
-            return; // un slot por ciclo
+            return; // one slot per cycle
         }
     }
 
     /**
-     * Busca el ítem recogible más cercano dentro de 8 bloques, navega hacia él
-     * y lo almacena en el inventario al llegar a ≤2.5 bloques de distancia.
+     * Searches for the nearest pickable item within 8 blocks, navigates toward it,
+     * and stores it in the inventory upon reaching ≤2.5 blocks distance.
      *
-     * <p>Si el ítem está suficientemente cerca, se descarta la entidad del mundo
-     * ({@link ItemEntity#discard()}) y se guarda el stack en el primer slot vacío.
-     * Si no hay slot vacío en este punto (condición de carrera improbable), el ítem
-     * se pierde; esto se evita normalmente porque el inventario se comprueba antes
-     * de llegar aquí.
+     * <p>Once the item is close enough, its entity is discarded from the world
+     * ({@link ItemEntity#discard()}) and the stack is saved in the first empty slot.
+     * If no empty slot exists at this point (unlikely race condition), the item
+     * is lost; this is normally prevented because the inventory is checked before
+     * reaching this method.
      *
-     * @param self      el aldeano
-     * @param level     el nivel de servidor
-     * @param inventory el inventario donde se almacenará el ítem recogido
+     * @param self      the villager
+     * @param level     the server level
+     * @param inventory the inventory where the picked-up item will be stored
      */
     private void pickupNearestItem(Villager self, ServerLevel level, SimpleContainer inventory) {
         List<ItemEntity> nearby = level.getEntitiesOfClass(
@@ -173,7 +173,7 @@ public class PickupHandler {
         ItemStack stack = target.getItem().copy();
         target.discard();
 
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
+        for (int i = 8; i < inventory.getContainerSize(); i++) {
             if (inventory.getItem(i).isEmpty()) {
                 inventory.setItem(i, stack);
                 //System.out.println("[PickupHandler] Guardó en inventario slot " + i + ": " + stack.getItem().getDescriptionId() + " x" + stack.getCount());

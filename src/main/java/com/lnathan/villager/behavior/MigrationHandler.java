@@ -14,98 +14,98 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.schedule.Activity;
 
 /**
- * Gestiona la migración del cartógrafo hacia otra aldea cuando tiene hambre.
+ * Manages the cartographer villager's migration to another village when hungry.
  *
- * <p>La migración es iniciada por {@link HungerHandler} al detectar que el aldeano
- * es cartógrafo y su cooldown ha expirado. Una vez activa, este handler toma el
- * control de la navegación hasta que el aldeano llega al destino.
+ * <p>Migration is initiated by {@link HungerHandler} when it detects that the villager
+ * is a cartographer and the migration cooldown has expired. Once active, this handler
+ * takes control of navigation until the villager reaches the destination.</p>
  *
- * <h3>Comportamiento durante la migración</h3>
+ * <h3>Behavior during migration</h3>
  * <ul>
- *   <li><b>Boost de velocidad:</b> se aplica un multiplicador {@code +1.5×} la primera
- *       vez que el handler toma el control, para que el cartógrafo llegue con fluidez
- *       sin repetir el seteo cada tick.</li>
- *   <li><b>Pathfinding incremental:</b> el pathfinder de Minecraft no puede calcular
- *       rutas de cientos de bloques. Por eso se avanza en tramos de 20 bloques hacia
- *       el destino final.</li>
- *   <li><b>Teletransporte fuera de rango:</b> si ningún jugador está a menos de
- *       128 bloques del cartógrafo, se teletransporta directamente al destino para
- *       no malgastar ciclos de CPU en pathfinding invisible.</li>
- *   <li><b>Supresión del Brain:</b> en cada tick se fuerza la actividad {@link Activity#IDLE}
- *       y se borra {@link MemoryModuleType#WALK_TARGET} para que el Brain no cancele
- *       la ruta de migración con sus propias tareas.</li>
+ *   <li><b>Speed boost:</b> a {@code +1.5×} total multiplier is applied the first time
+ *       the handler takes control, so the cartographer travels smoothly without re-applying
+ *       the modifier every tick.</li>
+ *   <li><b>Incremental pathfinding:</b> Minecraft's pathfinder cannot compute routes
+ *       hundreds of blocks long, so the villager advances in 20-block segments toward
+ *       the final destination.</li>
+ *   <li><b>Out-of-range teleport:</b> if no player is within 128 blocks of the cartographer,
+ *       it is teleported directly to the destination to avoid wasting CPU cycles on
+ *       invisible pathfinding.</li>
+ *   <li><b>Brain suppression:</b> every tick, {@link Activity#IDLE} is forced and
+ *       {@link MemoryModuleType#WALK_TARGET} is erased so the Brain does not cancel
+ *       the migration route with its own tasks.</li>
  * </ul>
  *
- * <h3>Fin de la migración</h3>
- * <p>Cuando el aldeano entra en un radio de 10 bloques del destino (o se teletransporta),
- * {@link #cleanMigration} elimina el boost, restaura el estado a
- * {@link VillagerState#NORMAL} y aplica un cooldown de 48 000 ticks (2 días de juego)
- * para evitar migraciones continuas.
+ * <h3>End of migration</h3>
+ * <p>When the villager enters a 10-block radius of the destination (or is teleported),
+ * {@link #cleanMigration} removes the speed boost, restores the state to
+ * {@link VillagerState#NORMAL}, and applies a 48,000-tick cooldown (2 in-game days)
+ * to prevent continuous migrations.</p>
  *
  * @see HungerHandler
  */
 public class MigrationHandler {
 
     /**
-     * Identificador del modificador de velocidad de migración.
-     * Usar un {@link Identifier} fijo garantiza que el modificador se aplica una sola
-     * vez y puede eliminarse de forma fiable al finalizar la migración.
+     * Identifier for the migration movement speed attribute modifier.
+     * Using a fixed {@link Identifier} ensures the modifier is applied only once
+     * and can be reliably removed when the migration ends.
      */
-    private static final Identifier MIGRATION_SPEED_ID = Identifier.fromNamespaceAndPath("mod", "migration_speed");
+    private static final Identifier MIGRATION_SPEED_ID =
+            Identifier.fromNamespaceAndPath("mod", "migration_speed");
 
     /**
-     * Posición objetivo de la migración (campana de la aldea destino).
-     * {@code null} cuando no hay migración activa.
+     * Target position of the migration (the destination village's bell).
+     * {@code null} when no migration is active.
      */
     private BlockPos migrationTarget = null;
 
     /**
-     * Indica si el boost de velocidad ya fue aplicado para la migración actual.
-     * Evita añadir el modificador en cada tick; se resetea al terminar la migración.
+     * Whether the speed boost has already been applied for the current migration.
+     * Prevents adding the modifier every tick; reset when the migration ends.
      */
     private boolean migrationSpeedApplied = false;
 
     /**
-     * Ticks restantes hasta la próxima actualización del jugador cercano cacheado.
-     * Se recalcula cada 20 ticks (1 segundo) para balancear precisión y rendimiento.
+     * Ticks remaining before the cached nearest player is recalculated.
+     * Refreshed every 20 ticks (1 second) to balance accuracy and performance.
      */
     private int playerCheckCooldown = 0;
 
     /**
-     * Jugador más cercano cacheado para este ciclo de 20 ticks.
-     * {@code null} si no hay ningún jugador en un radio de 128 bloques.
+     * Nearest player cached for the current 20-tick window.
+     * {@code null} if no player is within a 128-block radius.
      */
     private Player cachedNearestPlayer = null;
 
     /**
-     * GameTime a partir del cual el cartógrafo puede volver a migrar.
-     * Corresponde a 48 000 ticks (2 días de juego) desde el fin de la última migración.
+     * Game time from which the cartographer is allowed to migrate again.
+     * Set to 48,000 ticks (2 in-game days) after the end of the last migration.
      */
     private long migrationCooldownUntil = 0;
 
     /**
-     * Punto de entrada del tick. Solo actúa si el aldeano está en estado
-     * {@link VillagerState#CARTOGRAPHER_MIGRATING} y hay un destino registrado.
+     * Tick entry point. Only acts if the villager is in state
+     * {@link VillagerState#CARTOGRAPHER_MIGRATING} and a destination is registered.
      *
-     * <p>Cada llamada realiza (en orden):
+     * <p>Each call performs the following steps in order:</p>
      * <ol>
-     *   <li>Refresco del jugador cercano cacheado (cada 20 ticks).</li>
-     *   <li>Teletransporte directo si el cartógrafo está fuera del rango de visión
-     *       de todos los jugadores.</li>
-     *   <li>Aplicación del boost de velocidad (primera vez solamente).</li>
-     *   <li>Supresión del Brain para evitar cancelaciones de ruta.</li>
-     *   <li>Avance incremental de 20 bloques hacia el destino.</li>
-     *   <li>Comprobación de llegada y limpieza si el cartógrafo está a ≤10 bloques.</li>
+     *   <li>Refresh the cached nearest player (every 20 ticks).</li>
+     *   <li>Teleport directly to the destination if no player is within render distance.</li>
+     *   <li>Apply the speed boost (first time only).</li>
+     *   <li>Suppress the Brain to prevent route cancellations.</li>
+     *   <li>Advance 20 blocks toward the destination.</li>
+     *   <li>Check for arrival and clean up if within 10 blocks of the target.</li>
      * </ol>
      *
-     * @param self  el aldeano cartógrafo en migración
-     * @param level el nivel de servidor
+     * @param self  the cartographer villager currently migrating
+     * @param level the server level
      */
     public void tick(Villager self, ServerLevel level) {
-        if (((VillagerDataSync) self).getVillagerState() != VillagerState.CARTOGRAPHER_MIGRATING || migrationTarget == null)
-            return;
+        if (((VillagerDataSync) self).getVillagerState() != VillagerState.CARTOGRAPHER_MIGRATING
+                || migrationTarget == null) return;
 
-        // Recalculamos el jugador cercano una vez por segundo (20 ticks)
+        // Recalculate the nearest player once per second (every 20 ticks)
         if (playerCheckCooldown <= 0) {
             cachedNearestPlayer = level.getNearestPlayer(self, 128);
             playerCheckCooldown = 20;
@@ -113,28 +113,28 @@ public class MigrationHandler {
             playerCheckCooldown--;
         }
 
-        // Si el aldeano está fuera del rango de visión, lo teletransportamos directamente
+        // If no player is watching, teleport directly to save CPU
         if (cachedNearestPlayer == null || self.distanceToSqr(cachedNearestPlayer) > 128 * 128) {
             self.teleportTo(migrationTarget.getX(), migrationTarget.getY(), migrationTarget.getZ());
             cleanMigration(self);
             return;
         }
 
-        // Aplicamos el boost de velocidad solo la primera vez
+        // Apply the speed boost only once per migration
         if (!migrationSpeedApplied) {
             AttributeInstance speedAttr = self.getAttribute(Attributes.MOVEMENT_SPEED);
             if (speedAttr != null) {
-                speedAttr.addOrUpdateTransientModifier(new AttributeModifier(MIGRATION_SPEED_ID, 1.5, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
+                speedAttr.addOrUpdateTransientModifier(new AttributeModifier(
+                        MIGRATION_SPEED_ID, 1.5, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
             }
             migrationSpeedApplied = true;
         }
 
-        // Forzamos IDLE y borramos WALK_TARGET para que el Brain no interrumpa el path
+        // Force IDLE and erase WALK_TARGET so the Brain does not interrupt the migration path
         self.getBrain().setActiveActivityIfPossible(Activity.IDLE);
         self.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
 
-        // Navegamos en pasos de 20 bloques — el pathfinder no puede calcular
-        // rutas muy largas de una sola vez
+        // Advance in 20-block segments — the pathfinder cannot handle very long routes at once
         double dx = migrationTarget.getX() - self.getX();
         double dz = migrationTarget.getZ() - self.getZ();
         double length = Math.sqrt(dx * dx + dz * dz);
@@ -153,33 +153,32 @@ public class MigrationHandler {
     }
 
     /**
-     * Registra el destino de la migración. Llamado por {@link HungerHandler} al
-     * confirmar que existe una aldea válida a la que migrar.
+     * Registers the migration destination. Called by {@link HungerHandler} after confirming
+     * that a valid target village exists.
      *
-     * @param self   el aldeano (no usado aquí, incluido para coherencia con otros métodos)
-     * @param target la posición de la campana de la aldea destino
+     * @param self   the villager (not used here; included for consistency with other methods)
+     * @param target the block position of the destination village's bell
      */
     public void startMigration(Villager self, BlockPos target) {
         this.migrationTarget = target;
     }
 
     /**
-     * Devuelve el GameTime a partir del cual el cartógrafo puede volver a migrar.
-     * {@link HungerHandler} consulta este valor antes de intentar una nueva migración.
+     * Returns the game time from which the cartographer is allowed to migrate again.
+     * Consulted by {@link HungerHandler} before attempting a new migration.
      *
-     * @return tick de fin de cooldown; {@code 0} si nunca ha migrado
+     * @return the cooldown end tick; {@code 0} if the villager has never migrated
      */
     public long getMigrationCooldownUntil() {
         return migrationCooldownUntil;
     }
 
     /**
-     * Finaliza la migración activa: elimina el boost de velocidad, resetea todas las
-     * variables internas, restaura el estado del aldeano a {@link VillagerState#NORMAL}
-     * y aplica un cooldown de 48 000 ticks (2 días de juego) antes de permitir la
-     * siguiente migración.
+     * Finalizes the active migration: removes the speed boost, resets all internal state,
+     * restores the villager's state to {@link VillagerState#NORMAL}, and applies a
+     * 48,000-tick cooldown (2 in-game days) before allowing the next migration.
      *
-     * @param self el aldeano cuya migración ha terminado
+     * @param self the villager whose migration has ended
      */
     private void cleanMigration(Villager self) {
         AttributeInstance speedAttr = self.getAttribute(Attributes.MOVEMENT_SPEED);
@@ -192,8 +191,7 @@ public class MigrationHandler {
         cachedNearestPlayer = null;
         ((VillagerDataSync) self).setVillagerState(VillagerState.NORMAL);
 
-        // 1 día = 24000 ticks, 2 días = 48000
+        // 1 day = 24,000 ticks → 2 days = 48,000 ticks
         migrationCooldownUntil = self.level().getGameTime() + 48000;
-        //System.out.println("[MigrationHandler] Cartógrafo descansando hasta tick: " + migrationCooldownUntil);
     }
 }

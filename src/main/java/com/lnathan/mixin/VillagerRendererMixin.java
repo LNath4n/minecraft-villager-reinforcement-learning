@@ -11,30 +11,33 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Mixin de cliente que copia el estado del aldeano desde la entidad al
- * {@link VillagerRenderState} una vez por frame.
+ * Client-side Mixin that copies the villager state from the entity into the
+ * {@link VillagerRenderState} once per frame.
  *
- * <p>Minecraft 1.21+ separa los datos de entidad (servidor/lógica) de los datos
- * de renderizado ({@code RenderState}) para aislar el hilo de render del hilo
- * principal. Este Mixin sigue ese patrón: inyecta al final de
- * {@code extractRenderState} para leer {@link VillagerDataSync#getVillagerState()}
- * desde la entidad y escribirlo en {@link VillagerRenderStateAccessor#setVillagerState},
- * donde {@link com.lnathan.villager.HungryVillagerLayer} lo leerá durante el render.
+ * <p>Since Minecraft 1.21+, entity data (server/logic thread) is separated from
+ * render data ({@code RenderState}) to isolate the render thread from the main
+ * thread. This Mixin follows that pattern: it injects at the end of
+ * {@code extractRenderState} to read {@link VillagerDataSync#getVillagerState()}
+ * from the entity and write it into {@link VillagerRenderStateAccessor#setVillagerState},
+ * where {@link com.lnathan.villager.HungryVillagerLayer} will read it during rendering.
  *
- * <p>Sin este Mixin, {@code HungryVillagerLayer} no tendría acceso al estado del
- * aldeano, ya que las capas de render solo reciben el {@code RenderState}.
+ * <p>Without this Mixin, {@code HungryVillagerLayer} would have no access to the
+ * villager state, since render layers only receive the {@code RenderState}.
  */
 @Mixin(VillagerRenderer.class)
 public class VillagerRendererMixin {
 
     /**
-     * Copia el {@link com.lnathan.villager.VillagerState} desde la entidad al
-     * render state al final de cada llamada a {@code extractRenderState}.
+     * Copies the {@link com.lnathan.villager.VillagerState} from the entity into
+     * the render state at the end of each {@code extractRenderState} call.
      *
-     * @param entity       la entidad aldeano de la que se extraen los datos
-     * @param state        el render state que se está construyendo para este frame
-     * @param partialTicks fracción del tick actual (no usado aquí)
-     * @param ci           callback de Mixin (no usado)
+     * <p>This ensures that {@code HungryVillagerLayer} always has an up-to-date
+     * state value without needing direct access to the entity on the render thread.
+     *
+     * @param entity       the villager entity from which data is extracted
+     * @param state        the render state being built for this frame
+     * @param partialTicks fractional tick time for interpolation (unused here)
+     * @param ci           Mixin callback (unused)
      */
     @Inject(at = @At("TAIL"), method = "extractRenderState")
     private void extractState(Villager entity, VillagerRenderState state, float partialTicks, CallbackInfo ci) {

@@ -9,55 +9,54 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 
 /**
- * Gestiona el ciclo completo de depósito de ítems desde el inventario del aldeano
- * hacia un cofre cercano en el mundo.
+ * Manages the full item deposit cycle from the villager's inventory into a nearby chest.
  *
- * <p>El flujo es el siguiente:
+ * <p>The flow proceeds as follows:</p>
  * <ol>
- *   <li>{@link #findNearbyChest} — localiza el cofre más cercano con espacio disponible
- *       y envía al aldeano hacia él.</li>
- *   <li>{@link #handleDeposit} — corre cada tick; espera a que el aldeano llegue y
- *       deposita 1 ítem cada 10 ticks para simular un depósito gradual.</li>
- *   <li>{@link #handleChestClose} — cierra visualmente el cofre 40 ticks después de
- *       haber depositado el último ítem.</li>
+ *   <li>{@link #findNearbyChest} — locates the nearest chest with available space
+ *       and sends the villager toward it.</li>
+ *   <li>{@link #handleDeposit} — runs every tick; waits for the villager to arrive and
+ *       deposits 1 item every 10 ticks to simulate a gradual deposit animation.</li>
+ *   <li>{@link #handleChestClose} — closes the chest visually 40 ticks after the last
+ *       item has been deposited.</li>
  * </ol>
  *
- * <p>Este handler es invocado por {@link PickupHandler} cuando el inventario del aldeano
- * está lleno y necesita liberar espacio antes de seguir recogiendo ítems.
+ * <p>This handler is invoked by {@link PickupHandler} when the villager's inventory is
+ * full and space must be freed before continuing to pick up items.</p>
  */
 public class DepositHandler {
 
-    /** Posición del cofre destino activo, o {@code null} si no hay depósito en curso. */
+    /** Position of the active target chest, or {@code null} if no deposit is in progress. */
     private BlockPos pendingDepositChest = null;
 
     /**
-     * Stack pendiente de depositar. Se decrementa en 1 por cada ítem depositado
-     * con éxito. Cuando queda vacío, el depósito se considera completado.
+     * The item stack pending deposit. Decremented by 1 for each successfully deposited item.
+     * When empty, the deposit is considered complete.
      */
     private ItemStack pendingDepositStack = ItemStack.EMPTY;
 
     /**
-     * Ticks restantes antes del próximo intento de depósito.
-     * Se reinicia a 10 tras cada depósito exitoso (0.5 segundos a 20 TPS).
+     * Ticks remaining before the next deposit attempt.
+     * Resets to 10 after each successful deposit (0.5 seconds at 20 TPS).
      */
     private int depositTickCooldown = 0;
 
-    /** Posición del cofre que hay que cerrar visualmente, o {@code null} si no aplica. */
+    /** Position of the chest that needs to be visually closed, or {@code null} if not applicable. */
     private BlockPos chestClosePos = null;
 
     /**
-     * GameTime en el que se debe enviar el evento de cierre del cofre.
-     * {@code -1} indica que no hay cierre pendiente.
+     * Game time at which the chest-close block event should be sent.
+     * {@code -1} indicates no pending close.
      */
     private long chestCloseTick = -1;
 
     /**
-     * Punto de entrada del tick. Debe llamarse desde el Mixin del aldeano cada tick
-     * de servidor. Delega en {@link #handleChestClose} y {@link #handleDeposit}
-     * en ese orden para que el cofre no se cierre antes de terminar el depósito.
+     * Tick entry point. Must be called from the villager Mixin every server tick.
+     * Delegates to {@link #handleChestClose} and then {@link #handleDeposit} in that order
+     * so the chest does not close before the deposit finishes.
      *
-     * @param self  el aldeano cuyo depósito se gestiona
-     * @param level el nivel de servidor donde vive el aldeano
+     * @param self  the villager whose deposit is being managed
+     * @param level the server level the villager lives in
      */
     public void tick(Villager self, ServerLevel level) {
         handleChestClose(self, level);
@@ -65,27 +64,27 @@ public class DepositHandler {
     }
 
     /**
-     * Indica si hay un depósito activo pendiente de completarse.
+     * Returns whether a deposit is currently active and waiting to complete.
      *
-     * @return {@code true} si el stack pendiente no está vacío
+     * @return {@code true} if the pending stack is not empty
      */
     public boolean hasPendingDeposit() {
         return !pendingDepositStack.isEmpty();
     }
 
     /**
-     * Busca el cofre más cercano con espacio para {@code stack} dentro de un radio
-     * de 16 bloques en XZ (±3 en Y) y registra el destino para el depósito.
+     * Searches for the nearest chest with space for {@code stack} within a 16-block XZ radius
+     * (±3 in Y) and registers it as the deposit target.
      *
-     * <p>El depósito real no ocurre aquí; solo se guarda la posición del cofre y se
-     * inicia la navegación del aldeano hacia él. El método {@link #handleDeposit}
-     * realizará el depósito cuando el aldeano llegue.
+     * <p>The actual deposit does not happen here; only the chest position is stored and the
+     * villager's navigation is started toward it. {@link #handleDeposit} will perform the
+     * deposit once the villager arrives.</p>
      *
-     * @param self  el aldeano que necesita depositar
-     * @param level el nivel de servidor
-     * @param stack el ítem que se quiere depositar (se copia internamente con count=1)
-     * @return {@code true} si se encontró un cofre válido y se inició la navegación;
-     *         {@code false} si no hay ningún cofre con espacio en el radio de búsqueda
+     * @param self  the villager that needs to deposit items
+     * @param level the server level
+     * @param stack the item to deposit (copied internally with count = 1)
+     * @return {@code true} if a valid chest was found and navigation was started;
+     *         {@code false} if no chest with available space exists within range
      */
     public boolean findNearbyChest(Villager self, ServerLevel level, ItemStack stack) {
         BlockPos origin = self.blockPosition();
@@ -102,31 +101,29 @@ public class DepositHandler {
             pendingDepositChest = pos.immutable();
             pendingDepositStack = stack.copyWithCount(1);
             self.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 0.5f);
-            //System.out.println("[DepositHandler] Yendo a depositar en " + pos);
             return true;
         }
 
-        //System.out.println("[DepositHandler] No se encontró cofre disponible");
         return false;
     }
 
     /**
-     * Lógica de depósito incremental que se ejecuta cada tick.
+     * Incremental deposit logic that runs every tick.
      *
-     * <p>Si el aldeano no ha llegado aún al cofre, refuerza el pathfinding para evitar
-     * que el Brain cancele la ruta. Una vez junto al cofre, deposita 1 ítem cada
-     * 10 ticks hasta vaciar el stack o hasta que el cofre se llene.
+     * <p>If the villager has not yet reached the chest, pathfinding is reinforced to prevent
+     * the Brain from cancelling the route. Once the villager is adjacent to the chest,
+     * 1 item is deposited every 10 ticks until the stack is empty or the chest fills up.</p>
      *
-     * <p>Si el cofre desaparece mientras el aldeano camina, el depósito se cancela
-     * limpiamente con {@link #clearDeposit()}.
+     * <p>If the chest disappears while the villager is walking toward it, the deposit is
+     * cleanly cancelled via {@link #clearDeposit()}.</p>
      *
-     * @param self  el aldeano
-     * @param level el nivel de servidor
+     * @param self  the villager
+     * @param level the server level
      */
     private void handleDeposit(Villager self, ServerLevel level) {
         if (pendingDepositChest == null || pendingDepositStack.isEmpty()) return;
 
-        // Si no ha llegado, refuerza el path por si el navegador lo canceló
+        // Not there yet — reinforce the path in case the navigator cancelled it
         if (!self.blockPosition().closerThan(pendingDepositChest, 2.5)) {
             self.getNavigation().moveTo(
                     pendingDepositChest.getX(),
@@ -141,11 +138,11 @@ public class DepositHandler {
             depositTickCooldown--;
             return;
         }
-        depositTickCooldown = 10; // 1 ítem cada 10 ticks (0.5 segundos)
+        depositTickCooldown = 10; // 1 item every 10 ticks (0.5 seconds)
 
         BlockEntity be = level.getBlockEntity(pendingDepositChest);
         if (!(be instanceof ChestBlockEntity chest)) {
-            // El cofre desapareció mientras el aldeano caminaba
+            // Chest disappeared while the villager was walking to it
             clearDeposit();
             return;
         }
@@ -155,33 +152,30 @@ public class DepositHandler {
 
         if (remaining.isEmpty()) {
             pendingDepositStack.shrink(1);
-            //System.out.println("[DepositHandler] Depositó 1x " + single.getItem().getDescriptionId()+ " — quedan " + pendingDepositStack.getCount());
 
-            // Abre el cofre visualmente y programa el cierre
+            // Open the chest visually and schedule the close event
             level.blockEvent(pendingDepositChest, chest.getBlockState().getBlock(), 1, 1);
             chestClosePos = pendingDepositChest;
             chestCloseTick = level.getGameTime() + 40;
         } else {
-            // El cofre se llenó a mitad — abandonamos
-            //System.out.println("[DepositHandler] Cofre lleno, quedan " + pendingDepositStack.getCount());
+            // Chest filled up mid-deposit — abort
             clearDeposit();
         }
 
         if (pendingDepositStack.isEmpty()) {
             pendingDepositChest = null;
-            //System.out.println("[DepositHandler] Depósito completado");
         }
     }
 
     /**
-     * Cierra visualmente el cofre enviando el {@code blockEvent} de cierre (parámetro 0)
-     * cuando el gameTime alcanza {@link #chestCloseTick}.
+     * Closes the chest visually by sending the close block event (parameter 0)
+     * once the game time reaches {@link #chestCloseTick}.
      *
-     * <p>Se llama antes de {@link #handleDeposit} para que el cierre no se solape con
-     * la animación de apertura del siguiente ciclo.
+     * <p>Called before {@link #handleDeposit} so the close animation does not overlap
+     * with the open animation of the next deposit cycle.</p>
      *
-     * @param self  el aldeano (no usado directamente, incluido por consistencia)
-     * @param level el nivel de servidor
+     * @param self  the villager (not used directly; included for consistency)
+     * @param level the server level
      */
     private void handleChestClose(Villager self, ServerLevel level) {
         if (chestClosePos == null || chestCloseTick < 0) return;
@@ -193,8 +187,8 @@ public class DepositHandler {
     }
 
     /**
-     * Resetea el estado del depósito activo, limpiando posición y stack pendiente.
-     * Se llama cuando el cofre desaparece o se llena antes de terminar el depósito.
+     * Resets the active deposit state, clearing the target chest position and the pending stack.
+     * Called when the chest disappears or fills up before the deposit is complete.
      */
     private void clearDeposit() {
         pendingDepositChest = null;
@@ -202,12 +196,12 @@ public class DepositHandler {
     }
 
     /**
-     * Comprueba si un cofre tiene al menos un slot libre o un slot apilable
-     * compatible con {@code stack}.
+     * Checks whether a chest has at least one empty slot or a stackable slot
+     * compatible with {@code stack}.
      *
-     * @param chest el cofre a examinar
-     * @param stack el ítem que se quiere insertar
-     * @return {@code true} si hay espacio disponible
+     * @param chest the chest to examine
+     * @param stack the item to be inserted
+     * @return {@code true} if space is available
      */
     private boolean hasSpace(ChestBlockEntity chest, ItemStack stack) {
         for (int i = 0; i < chest.getContainerSize(); i++) {
@@ -219,13 +213,13 @@ public class DepositHandler {
     }
 
     /**
-     * Inserta {@code stack} en {@code container} intentando primero apilar sobre slots
-     * existentes del mismo tipo y luego usando slots vacíos.
+     * Inserts {@code stack} into {@code container} by first trying to stack onto existing
+     * slots of the same item type, then falling back to empty slots.
      *
-     * @param container el inventario destino
-     * @param stack     el stack a insertar (se opera sobre una copia interna)
-     * @return el remanente que no pudo insertarse; {@link ItemStack#EMPTY} si todo
-     *         se insertó correctamente
+     * @param container the target inventory
+     * @param stack     the stack to insert (operated on a copy internally)
+     * @return the remainder that could not be inserted; {@link ItemStack#EMPTY} if everything
+     *         was inserted successfully
      */
     private ItemStack addToContainer(Container container, ItemStack stack) {
         ItemStack remaining = stack.copy();
