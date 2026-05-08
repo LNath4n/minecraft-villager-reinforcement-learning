@@ -1,0 +1,59 @@
+{
+  "quest.mod.madera_invierno.title": "Wood for the Winter",
+  "quest.mod.madera_invierno.description": "I need 10 oak logs before the cold arrives. Can you help me?",
+
+  "quest.mod.suministros_medicos.title": "Medical Supplies",
+  "quest.mod.suministros_medicos.description": "I need 5 poppies to prepare medicine. Bring them to me when you have them.",
+
+  "quest.mod.minerales_escasos.title": "Scarce Minerals",
+  "quest.mod.minerales_escasos.description": "The village blacksmiths need iron. Get me 3 ingots and I will reward you well.",
+
+  "quest.mod.journal.title": "Quest Journal",
+  "quest.mod.journal.active": "Active",
+  "quest.mod.journal.ready": "Ready to turn in",
+  "quest.mod.journal.completed": "Completed",
+  "quest.mod.journal.empty": "No quests in this category",
+
+  "quest.mod.map.title": "World Map",
+  "quest.mod.map.legend.player": "● You",
+  "quest.mod.map.legend.village": "● Village",
+  "quest.mod.map.distance": "Distance: %s blocks",
+  "quest.mod.map.missions_count": "Quests (%s):",
+  "quest.mod.map.no_missions": "No active quests",
+
+  "quest.mod.toast.title": "Mission accepted!",
+  "quest.mod.toast.subtitle": "Collect resources",
+
+  "quest.mod.accept": "Accept",
+  "quest.mod.deny": "Deny",
+  "quest.mod.deliver": "Deliver",
+  "quest.mod.close": "Close",
+  "quest.mod.progress": "Progress: ",
+
+  "village.mod.prefix.1": "Village of",
+  "village.mod.prefix.2": "Town of",
+  "village.mod.prefix.3": "Settlement of",
+  "village.mod.prefix.4": "Refuge of",
+  "village.mod.prefix.5": "Hamlet of",
+
+  "village.mod.name.1": "the Stone",
+  "village.mod.name.2": "the Oaks",
+  "village.mod.name.3": "the Hill",
+  "village.mod.name.4": "the Winds",
+  "village.mod.name.5": "the Moon",
+  "village.mod.name.6": "the Pines",
+  "village.mod.name.7": "the Waters",
+  "village.mod.name.8": "the Mist",
+  "village.mod.name.9": "the Cedars",
+  "village.mod.name.10": "the Stars",
+  "village.mod.name.11": "the Dawn",
+  "village.mod.name.12": "the Valleys",
+  "village.mod.name.13": "the Forge",
+  "village.mod.name.14": "the Fields",
+  "village.mod.name.15": "the River",
+  "village.mod.name.16": "the Storm",
+  "village.mod.name.17": "the Poplars",
+  "village.mod.name.18": "the Shadow",
+  "village.mod.name.19": "the Ravens",
+  "village.mod.name.20": "the Moss"
+}

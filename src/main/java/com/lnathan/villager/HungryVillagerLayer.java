@@ -16,45 +16,40 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 /**
- * Capa de renderizado que dibuja un icono flotante sobre la cabeza del aldeano
- * cuando su estado es distinto de {@link VillagerState#NORMAL}.
+ * Render layer that draws a floating icon above the villager's head
+ * based on its current {@link VillagerState}.
  *
- * <p>Se registra en el {@code VillagerRenderer} durante la inicialización del mod
- * (lado cliente) añadiendo esta capa a la lista de capas del renderer. Hereda de
- * {@link RenderLayer} siguiendo el patrón estándar de Minecraft para decoraciones
- * sobre entidades (comparable a la capa de armadura o la de nombre).
- *
- * <h3>Iconos por estado</h3>
+ * <h3>Icons per state</h3>
  * <ul>
- *   <li>{@link VillagerState#HUNGRY}  {@link Items#BOWL} (cuenco vacío).</li>
- *   <li>{@link VillagerState#CARTOGRAPHER_MIGRATING}  {@link Items#MAP}.</li>
- *   <li>{@link VillagerState#NORMAL}  no se dibuja nada.</li>
+ *   <li>{@link VillagerState#HUNGRY}                → {@link Items#BOWL} (empty bowl)</li>
+ *   <li>{@link VillagerState#CARTOGRAPHER_MIGRATING}→ {@link Items#MAP}</li>
+ *   <li>{@link VillagerState#GATHERING}             → {@link Items#OAK_LOG}</li>
+ *   <li>{@link VillagerState#DEPOSITING}            → {@link Items#CHEST}</li>
+ *   <li>{@link VillagerState#FLEEING}               → {@link Items#SHIELD}</li>
+ *   <li>{@link VillagerState#SOCIALIZING}           → {@link Items#BELL}</li>
+ *   <li>{@link VillagerState#RESTING}               → {@link Items#WHITE_BED}</li>
+ *   <li>{@link VillagerState#BUILDING}              → {@link Items#BRICKS}</li>
+ *   <li>{@link VillagerState#EXPLORING}             → {@link Items#COMPASS}</li>
+ *   <li>{@link VillagerState#IDLE}                  → {@link Items#CLOCK} (waiting)</li>
+ *   <li>{@link VillagerState#NORMAL}                → no icon</li>
  * </ul>
  *
- * <h3>Optimización de distancia</h3>
- * <p>El icono solo se renderiza si la distancia al cuadrado a la cámara es
- * {@code ≤ 64} ({@code 8 bloques}), para no gastar draw calls en aldeanos
- * que el jugador apenas puede ver.
+ * <h3>Distance optimization</h3>
+ * <p>The icon is only rendered within ≤8 blocks of the camera (distSq ≤ 64).
  *
- * <h3>Animación de bobbing</h3>
- * <p>El icono oscila verticalmente con una función seno suave basada en
- * {@code state.ageInTicks} para dar sensación de movimiento sin coste
- * adicional de animación.
+ * <h3>Bobbing animation</h3>
+ * <p>Smooth vertical oscillation using {@code sin(ageInTicks * 0.05)}.
  */
 public class HungryVillagerLayer extends RenderLayer<VillagerRenderState, VillagerModel> {
 
-    /**
-     * Resolvedor de modelos de ítem inyectado desde el renderer padre.
-     * Se necesita para construir el {@link ItemStackRenderState} en cada frame
-     * sin acceder al {@code Minecraft} singleton en el camino crítico.
-     */
+    /** Resolver used to build the {@link ItemStackRenderState} for the icon. */
     private final ItemModelResolver itemModelResolver;
 
     /**
-     * Construye la capa y la enlaza al renderer padre.
+     * Constructs a new {@code HungryVillagerLayer} for the given parent renderer.
      *
-     * @param parent            el renderer de aldeano al que pertenece esta capa
-     * @param itemModelResolver resolvedor de modelos de ítem del renderer
+     * @param parent            the parent renderer that owns this layer
+     * @param itemModelResolver the item model resolver used to render the icon
      */
     public HungryVillagerLayer(RenderLayerParent<VillagerRenderState, VillagerModel> parent,
                                ItemModelResolver itemModelResolver) {
@@ -63,27 +58,15 @@ public class HungryVillagerLayer extends RenderLayer<VillagerRenderState, Villag
     }
 
     /**
-     * Renderiza el icono flotante para este frame.
+     * Submits the floating icon to the render pipeline if the villager's state
+     * has an associated icon and the camera is within range.
      *
-     * <p>Secuencia de transformaciones aplicadas al {@link PoseStack}:
-     * <ol>
-     *   <li>Traslación vertical hasta justo sobre la cabeza del aldeano
-     *       ({@code boundingBoxHeight - 2.8}).</li>
-     *   <li>Rotación en Y inversa a {@code yRot} para que el icono siempre
-     *       mire a la cámara.</li>
-     *   <li>Rotación en X por {@code xRot} para compensar la inclinación
-     *       de la cámara.</li>
-     *   <li>Escala {@code 0.4×} con Y negativa para corregir la orientación
-     *       del modelo de ítem en contexto {@code FIXED}.</li>
-     *   <li>Traslación de bobbing basada en seno.</li>
-     * </ol>
-     *
-     * @param poseStack           pila de transformaciones del frame actual
-     * @param submitNodeCollector colector de nodos de renderizado
-     * @param lightCoords         coordenadas de luz empaquetadas (sky + block)
-     * @param state               render state del aldeano para este frame
-     * @param yRot                rotación Y del cuerpo del aldeano en grados
-     * @param xRot                rotación X del cuerpo del aldeano en grados
+     * @param poseStack           the current pose stack for transformations
+     * @param submitNodeCollector the render node collector for this frame
+     * @param lightCoords         packed light coordinates for the icon
+     * @param state               the current render state of the villager
+     * @param yRot                the villager's current Y rotation (yaw)
+     * @param xRot                the villager's current X rotation (pitch)
      */
     @Override
     public void submit(PoseStack poseStack, SubmitNodeCollector submitNodeCollector,
@@ -92,29 +75,36 @@ public class HungryVillagerLayer extends RenderLayer<VillagerRenderState, Villag
 
         VillagerState villagerState = ((VillagerRenderStateAccessor) state).getVillagerState();
 
+        // State → icon item mapping.
+        // NORMAL has no icon — returns null and short-circuits.
         Item icon = switch (villagerState) {
-            case HUNGRY -> Items.BOWL;
+            case HUNGRY                 -> Items.BOWL;
             case CARTOGRAPHER_MIGRATING -> Items.MAP;
-            default -> null;
+            case GATHERING              -> Items.OAK_LOG;
+            case DEPOSITING             -> Items.CHEST;
+            case FLEEING                -> Items.SHIELD;
+            case SOCIALIZING            -> Items.BELL;
+            case RESTING                -> Items.WHITE_BED;
+            case BUILDING               -> Items.BRICKS;
+            case EXPLORING              -> Items.COMPASS;
+            case IDLE                   -> Items.CLOCK;
+            default                     -> null; // NORMAL and any future state without an icon
         };
 
         if (icon == null) return;
-        // Solo renderizamos si el aldeano está a ≤8 bloques (64 = 8²)
-        if (state.distanceToCameraSq > 64.0) return;
+        if (state.distanceToCameraSq > 64.0) return; // only within ≤8 blocks
 
         poseStack.pushPose();
 
-        // Posicionamos el icono justo sobre la cabeza del aldeano
+        // Position above the villager's head
         poseStack.translate(0, state.boundingBoxHeight - 2.8, 0);
-        // Contrarotamos para que el icono siempre mire hacia la cámara
+        // Counter-rotate so the icon always faces the camera
         poseStack.mulPose(Axis.YP.rotationDegrees(-yRot));
         poseStack.mulPose(Axis.XP.rotationDegrees(xRot));
-        // Y negativa corrige la orientación del modelo de ítem en modo FIXED
+        // Negative Y corrects model orientation in FIXED display mode
         poseStack.scale(0.4f, -0.4f, 0.4f);
-
-        // Animación de bobbing suave basada en la edad del aldeano
-        float bob = (float) Math.sin(state.ageInTicks * 0.05f) * 0.15f;
-        poseStack.translate(0, bob, 0);
+        // Smooth bobbing
+        poseStack.translate(0, (float) Math.sin(state.ageInTicks * 0.05f) * 0.15f, 0);
 
         Minecraft mc = Minecraft.getInstance();
         ItemStackRenderState renderState = new ItemStackRenderState();
@@ -125,6 +115,7 @@ public class HungryVillagerLayer extends RenderLayer<VillagerRenderState, Villag
                 mc.player
         );
         renderState.submit(poseStack, submitNodeCollector, lightCoords, OverlayTexture.NO_OVERLAY, 0);
+
         poseStack.popPose();
     }
 }

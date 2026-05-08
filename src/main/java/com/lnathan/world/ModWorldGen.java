@@ -13,39 +13,37 @@ import java.util.Deque;
 import java.util.Set;
 
 /**
- * Punto de entrada de la generación procedural de campamentos en el mundo.
+ * Entry point for procedural camp generation in the world.
  *
- * <p>Se engancha a dos eventos del ciclo de vida de Fabric para implementar un
- * flujo diferido de dos etapas:
+ * <p>Hooks into two Fabric lifecycle events to implement a deferred two-stage pipeline:
  * <ul>
- *   <li><b>{@code CHUNK_LOAD}:</b> evalúa si el chunk merece un campamento y, en
- *       caso afirmativo, encola una tarea para construirlo más tarde.</li>
- *   <li><b>{@code END_SERVER_TICK}:</b> procesa una tarea de la cola por tick,
- *       siempre en el hilo principal del servidor.</li>
+ *   <li><b>{@code CHUNK_LOAD}:</b> evaluates whether the chunk deserves a camp and,
+ *       if so, enqueues a task to build it later.</li>
+ *   <li><b>{@code END_SERVER_TICK}:</b> processes one task from the queue per tick,
+ *       always on the main server thread.</li>
  * </ul>
  *
- * <h3>Por qué dos etapas</h3>
- * <p>{@code CHUNK_LOAD} puede dispararse desde hilos de I/O ajenos al servidor.
- * Construir el campamento directamente en ese callback podría causar
- * condiciones de carrera al modificar el mundo. Diferir la construcción a
- * {@code END_SERVER_TICK} garantiza ejecución en el hilo principal y también
- * da tiempo ({@link #TICKS_ESPERA} ticks) a que los chunks vecinos terminen
- * de cargarse antes de colocar bloques en ellos.
+ * <h3>Why two stages</h3>
+ * <p>{@code CHUNK_LOAD} may fire from I/O threads external to the server.
+ * Building the camp directly in that callback could cause race conditions when
+ * modifying the world. Deferring construction to {@code END_SERVER_TICK} guarantees
+ * execution on the main thread and also gives time ({@link #TICKS_ESPERA} ticks)
+ * for neighboring chunks to finish loading before placing blocks in them.
  *
- * <h3>Determinismo</h3>
- * <p>La seed de cada chunk se calcula combinando la seed del mundo con las
- * coordenadas del chunk mediante constantes prime multiplicativas. Esto garantiza
- * que el mismo chunk siempre "decida" lo mismo, sin importar cuántas veces se
- * cargue o recargue.
+ * <h3>Determinism</h3>
+ * <p>Each chunk's seed is calculated by combining the world seed with the chunk
+ * coordinates using prime multiplicative constants. This guarantees that the same
+ * chunk always makes the same decision, regardless of how many times it is loaded
+ * or reloaded.
  *
  * @see CampamentoPlacer
  */
 public class ModWorldGen {
 
     /**
-     * Biomas donde el campamento puede generarse.
-     * Se priorizan terrenos abiertos y relativamente planos donde las carpas
-     * quedan bien y los obstáculos de vegetación son escasos.
+     * Biomes where a camp may be generated.
+     * Open, relatively flat terrain is prioritized where tents look natural
+     * and vegetation obstacles are scarce.
      */
     private static final Set<ResourceKey<net.minecraft.world.level.biome.Biome>> BIOMAS_PERMITIDOS = Set.of(
             Biomes.BEACH,
@@ -61,10 +59,10 @@ public class ModWorldGen {
     );
 
     /**
-     * Biomas donde el campamento no puede generarse.
-     * Bosques, junglas y pantanos tienen demasiada vegetación o terreno irregular,
-     * lo que hace que la mayoría de carpas se cancelen por obstáculos y el resultado
-     * visual sea pobre.
+     * Biomes where a camp may not be generated.
+     * Forests, jungles, and swamps have too much vegetation or irregular terrain,
+     * which causes most tents to be cancelled due to obstacles and produces a
+     * poor visual result.
      */
     private static final Set<ResourceKey<net.minecraft.world.level.biome.Biome>> BIOMAS_BLOQUEADOS = Set.of(
             Biomes.FOREST,
@@ -83,60 +81,60 @@ public class ModWorldGen {
     );
 
     /**
-     * Inverso de la probabilidad de generación por chunk cargado.
-     * Con 300, aproximadamente 1 de cada 300 chunks en bioma permitido
-     * generará un campamento (~0.33%). Reducir este valor aumenta la frecuencia;
+     * Inverse of the generation probability per loaded chunk.
+     * With 300, approximately 1 in every 300 chunks in an allowed biome
+     * will generate a camp (~0.33%). Reducing this value increases frequency.
      */
     private static final int PROBABILIDAD = 300;
 
     /**
-     * Ticks de espera entre encolar una tarea y ejecutarla.
-     * 60 ticks (~3 segundos a 20 TPS) dan margen para que los chunks vecinos
-     * al campamento terminen de cargar antes de colocar bloques en ellos.
+     * Ticks to wait between enqueuing a task and executing it.
+     * 60 ticks (~3 seconds at 20 TPS) provide enough margin for the chunks
+     * neighboring the camp to finish loading before blocks are placed in them.
      */
     private static final int TICKS_ESPERA = 60;
 
     /**
-     * Agrupa todos los datos necesarios para construir un campamento diferido.
-     * Se almacena en {@link #pendientes} y se consume en {@code END_SERVER_TICK}.
+     * Groups all the data needed to build a deferred camp.
+     * Stored in {@link #pendientes} and consumed in {@code END_SERVER_TICK}.
      *
-     * @param level         el nivel overworld donde se construirá el campamento
-     * @param esquina        esquina NW del área 50×50 del campamento
-     * @param random         fuente de aleatoriedad derivada de la seed del chunk
-     * @param tickEjecucion  gameTime a partir del cual se puede ejecutar la tarea
+     * @param level         the overworld level where the camp will be built
+     * @param esquina       NW corner of the camp's 50×50 area
+     * @param random        randomness source derived from the chunk seed
+     * @param tickEjecucion game time from which the task may be executed
      */
     private record TareaCamp(ServerLevel level, BlockPos esquina, RandomSource random, long tickEjecucion) {}
 
     /**
-     * Cola FIFO de campamentos pendientes de construcción.
+     * FIFO queue of camps pending construction.
      *
-     * <p>Puede ser accedida tanto desde {@code CHUNK_LOAD} (potencialmente en un
-     * hilo de I/O) como desde {@code END_SERVER_TICK} (hilo principal), por lo que
-     * todos los accesos están sincronizados con {@code synchronized (pendientes)}.
+     * <p>May be accessed from both {@code CHUNK_LOAD} (potentially on an I/O thread)
+     * and {@code END_SERVER_TICK} (main thread), so all accesses are synchronized
+     * with {@code synchronized (pendientes)}.
      */
     private static final Deque<TareaCamp> pendientes = new ArrayDeque<>();
 
     /**
-     * Registra los listeners de Fabric que controlan la generación de campamentos.
+     * Registers the Fabric listeners that control camp generation.
      *
-     * <p>Debe llamarse una sola vez durante la inicialización del mod
+     * <p>Must be called exactly once during mod initialization.
      *
-     * <p>Registra dos listeners:
+     * <p>Registers two listeners:
      * <ul>
-     *   <li><b>CHUNK_LOAD — evaluación:</b> calcula una seed determinista para el
-     *       chunk, decide si merece campamento según bioma y probabilidad, y encola
-     *       la tarea con un retardo de {@link #TICKS_ESPERA} ticks.</li>
-     *   <li><b>END_SERVER_TICK — construcción:</b> saca una tarea de la cabeza de
-     *       la cola si su {@code tickEjecucion} ya fue alcanzado y delega en
+     *   <li><b>CHUNK_LOAD — evaluation:</b> computes a deterministic seed for the
+     *       chunk, decides whether it deserves a camp based on biome and probability,
+     *       and enqueues the task with a delay of {@link #TICKS_ESPERA} ticks.</li>
+     *   <li><b>END_SERVER_TICK — construction:</b> pops the head task from the queue
+     *       if its {@code tickEjecucion} has been reached and delegates to
      *       {@link CampamentoPlacer#place}.</li>
      * </ul>
      */
     public static void register() {
 
-        // Evaluacion
-        // Cada vez que un chunk carga, calculamos una seed determinista a partir
-        // de la seed del mundo y la posición del chunk. Así el mismo chunk siempre
-        // "decide" lo mismo, sin importar cuántas veces se cargue.
+        // Evaluation
+        // Each time a chunk loads, we compute a deterministic seed from the world seed
+        // and the chunk position. This way the same chunk always "decides" the same
+        // outcome, regardless of how many times it is loaded.
         ServerChunkEvents.CHUNK_LOAD.register((serverLevel, chunk, holder) -> {
             if (!serverLevel.dimension().equals(ServerLevel.OVERWORLD)) return;
 
@@ -154,13 +152,13 @@ public class ModWorldGen {
             if (bioma == null) return;
             if (!BIOMAS_PERMITIDOS.contains(bioma)) return;
 
-            // Aunque el bioma del chunk sea válido, un bosque cercano indica
-            // que muchas carpas se cancelarán por obstáculos — no vale la pena
+            // Even if the chunk's biome is valid, a nearby forest suggests that
+            // many tents will be cancelled due to obstacles — not worth attempting
             if (tieneBiomaBlockeadoCerca(serverLevel, centro, 80)) return;
 
             //System.out.println("[ModWorldGen Camp] Campamento en cola para " + centro);
 
-            // La esquina es el punto (0,0) del área 50×50 del campamento
+            // The corner is the (0,0) point of the camp's 50×50 area
             long tickObjetivo = serverLevel.getGameTime() + TICKS_ESPERA;
             BlockPos esquina = centro.offset(-25, 0, -25);
             synchronized (pendientes) {
@@ -168,9 +166,9 @@ public class ModWorldGen {
             }
         });
 
-        // Construccion
-        // Procesamos de a una tarea por tick para no bloquear el servidor.
-        // Si la cola tiene muchas tareas, se irán ejecutando en ticks consecutivos.
+        // Construction
+        // We process one task per tick to avoid blocking the server.
+        // If the queue has many tasks, they will be executed on consecutive ticks.
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             synchronized (pendientes) {
                 if (pendientes.isEmpty()) return;
@@ -189,18 +187,18 @@ public class ModWorldGen {
     }
 
     /**
-     * Comprueba si hay algún bioma bloqueado dentro del radio indicado alrededor
-     * del centro, muestreando en una cuadrícula de paso 8 bloques.
+     * Checks whether any blocked biome exists within the given radius around
+     * the center, sampling on a grid with a step of 8 blocks.
      *
-     * <p>Usar pasos de 8 en lugar de 1 es significativamente más barato y suficiente
-     * para detectar si hay un bosque o pantano adyacente al área del campamento.
-     * Un bioma bloqueado cercano indica que las carpas tendrían alta tasa de
-     * cancelación por obstáculos, por lo que no vale la pena intentar la generación.
+     * <p>Using steps of 8 instead of 1 is significantly cheaper and sufficient
+     * to detect whether a forest or swamp is adjacent to the camp area.
+     * A nearby blocked biome indicates that tents would have a high cancellation rate
+     * due to obstacles, so generation is not worth attempting.
      *
-     * @param level  el nivel donde consultar los biomas
-     * @param centro posición central desde la que medir el radio
-     * @param radio  radio de búsqueda en bloques
-     * @return {@code true} si se encontró al menos un bioma bloqueado en el radio
+     * @param level  the level where biomes are queried
+     * @param centro center position from which the radius is measured
+     * @param radio  search radius in blocks
+     * @return {@code true} if at least one blocked biome was found within the radius
      */
     private static boolean tieneBiomaBlockeadoCerca(ServerLevel level, BlockPos centro, int radio) {
         for (int x = -radio; x <= radio; x += 8) {

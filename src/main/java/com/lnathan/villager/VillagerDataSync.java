@@ -1,40 +1,40 @@
 package com.lnathan.villager;
 
 /**
- * Interfaz de sincronización del estado del aldeano en el <b>lado servidor</b>.
+ * Synchronization interface for the villager's state on the <b>server side</b>.
  *
- * <p>Implementada por {@code VillagerDataMixin}, que la inyecta en la clase
- * {@link net.minecraft.world.entity.npc.villager.Villager} mediante Mixin.
- * Permite que cualquier handler de comportamiento (ej. {@code HungerHandler},
- * {@code FleeHandler}) lea y escriba el estado del aldeano sin depender
- * de un cast directo al Mixin concreto.
+ * <p>Implemented by {@code VillagerDataMixin}, which injects it into the
+ * {@link net.minecraft.world.entity.npc.villager.Villager} class via Mixin.
+ * Allows any behavior handler (e.g. {@code HungerHandler}, {@code FleeHandler})
+ * to read and write the villager's state without depending on a direct cast
+ * to the concrete Mixin class.
  *
- * <p>El estado se almacena en un {@link net.minecraft.network.syncher.SynchedEntityData}
- * canal, lo que garantiza que los cambios se propagan automáticamente a todos
- * los clientes conectados.
+ * <p>The state is stored in a {@link net.minecraft.network.syncher.SynchedEntityData}
+ * channel, which ensures that changes are automatically propagated to all
+ * connected clients.
  *
- * @see VillagerRenderStateAccessor contraparte en el lado cliente
- * @see VillagerState valores posibles del estado
+ * @see VillagerRenderStateAccessor counterpart on the client side
+ * @see VillagerState possible state values
  */
 public interface VillagerDataSync {
 
     /**
-     * Devuelve el estado actual del aldeano tal como está almacenado en el
-     * canal de datos sincronizados.
+     * Returns the current state of the villager as stored in the
+     * synchronized data channel.
      *
-     * @return estado actual; nunca {@code null} (el valor por defecto es
+     * @return the current state; never {@code null} (the default value is
      *         {@link VillagerState#NORMAL})
      */
     VillagerState getVillagerState();
 
     /**
-     * Actualiza el estado del aldeano y lo propaga a los clientes a través
-     * del canal de {@code SynchedEntityData}.
+     * Updates the villager's state and propagates it to clients through
+     * the {@code SynchedEntityData} channel.
      *
-     * <p>Solo debe llamarse desde el hilo del servidor (dentro de
-     * {@code customServerAiStep} o equivalente).
+     * <p>Must only be called from the server thread (inside
+     * {@code customServerAiStep} or equivalent).
      *
-     * @param state el nuevo estado; no debe ser {@code null}
+     * @param state the new state; must not be {@code null}
      */
     void setVillagerState(VillagerState state);
 }

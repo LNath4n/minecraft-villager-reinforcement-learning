@@ -1,14 +1,26 @@
 package com.lnathan.mixin;
-
-import com.lnathan.villager.VillagerDataSync;
-import com.lnathan.villager.behavior.DepositHandler;
-import com.lnathan.villager.behavior.FleeHandler;
-import com.lnathan.villager.behavior.HungerHandler;
-import com.lnathan.villager.behavior.MigrationHandler;
-import com.lnathan.villager.behavior.PickupHandler;
+import com.lnathan.LockableVillager;
+import com.lnathan.Mod;
+import com.lnathan.advancement.ModToast;
+import com.lnathan.network.OpenQuestPacket;
+import com.lnathan.village.VillageRegistry;
+import com.lnathan.villager.VillagerInventoryWrapper;
+import com.lnathan.villager.VillagerNamePool;
+import com.lnathan.villager.brian.VillagerBrain;
+import com.lnathan.villager.behavior.*;
+import com.lnathan.villager.brian.VillagerHurtTracker;
+import com.lnathan.villager.quests.ActiveQuest;
+import com.lnathan.villager.quests.QuestDefinitions;
+import com.lnathan.villager.quests.QuestState;
+import com.lnathan.villager.quests.QuestTracker;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.*;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.npc.InventoryCarrier;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ChestMenu;
@@ -24,161 +36,463 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Punto de entrada del comportamiento del aldeano modificado.
+ * Main entry point for the modified villager behaviour.
  *
- * <p>Este Mixin actúa únicamente como <em>orquestador</em>: instancia los handlers,
- * los llama en el orden correcto cada tick y gestiona el inventario personalizado
- * del aldeano. Toda la lógica de comportamiento real vive en sus handlers
- * correspondientes.
+ * <p>This Mixin acts solely as an <em>orchestrator</em>: it instantiates the
+ * handlers, calls them in the correct order each tick, and manages the villager's
+ * custom inventory. All real behaviour logic lives inside the individual handlers.
  *
- * <h3>Handlers registrados</h3>
+ * <h3>Registered handlers</h3>
  * <ul>
- *   <li>{@link FleeHandler} — huida cuando el jugador tiene reputación negativa.</li>
- *   <li>{@link MigrationHandler} — cartógrafo buscando la campana de otra aldea.</li>
- *   <li>{@link HungerHandler} — slowdown y decisión de destino al tener hambre.</li>
- *   <li>{@link PickupHandler} — recoge ítems del suelo hacia el inventario.</li>
- *   <li>{@link DepositHandler} — deposita ítems en cofres cercanos + cierre visual.</li>
+ *   <li>{@link FleeHandler} — flee behaviour when the player has negative reputation.</li>
+ *   <li>{@link MigrationHandler} — cartographer searching for another village's bell.</li>
+ *   <li>{@link HungerHandler} — slowdown and destination decision when hungry.</li>
+ *   <li>{@link PickupHandler} — picks up ground items into the inventory.</li>
+ *   <li>{@link DepositHandler} — deposits items into nearby chests and closes the visual.</li>
  * </ul>
  *
- * <h3>Inventario</h3>
- * <p>Se añade un {@link SimpleContainer} de 9 slots que se puede inspeccionar
- * haciendo Shift+clic sobre el aldeano. El inventario se persiste en NBT mediante
- * los hooks {@link #onSave} y {@link #onLoad}.
+ * <h3>Inventory</h3>
+ * <p>A wrapper is added that combines the vanilla villager inventory with additional
+ * mod slots (8–17). It can be inspected by Shift+clicking the villager.
+ * The mod inventory is persisted to NBT via {@link #onSave} and {@link #onLoad}.
  *
- * <h3>Orden de tick</h3>
- * <p>Los handlers se llaman en este orden dentro de {@code customServerAiStep}:
- * {@code deposit → migration → flee → hunger → pickup}. El depósito va primero
- * para que el inventario esté actualizado antes de que pickup decida si hay espacio.
+ * <h3>Tick order</h3>
+ * <p>Handlers are called in this order inside {@code customServerAiStep}:
+ * {@code deposit → migration → flee → (the rest is orchestrated by the brain)}.
+ * Deposit runs first so the inventory is up to date.
  */
 @Mixin(Villager.class)
-public class VillagerMixin {
+public class VillagerMixin implements LockableVillager {
 
     /**
-     * Inventario personalizado del aldeano. Se inicializa de forma lazy la primera
-     * vez que se necesita (en el primer tick o al cargar desde NBT) para evitar
-     * instanciar contenedores en aldeanos que nunca interactúan con ítems.
+     * Last known health of the villager, used to detect when damage is received
+     * and notify the {@link VillagerHurtTracker}.
+     */
+    @Unique private float lastHealth = -1f;
+
+    /**
+     * Inventory wrapper that combines vanilla slots with mod slots.
+     * Initialised lazily on first access.
      */
     @Unique
-    private SimpleContainer inventory = null;
+    private VillagerInventoryWrapper wrapperInventory = null;
 
-    /** Gestiona el depósito de ítems en cofres cercanos. */
+    /** Handles depositing items into nearby chests. */
     @Unique private final DepositHandler depositHandler = new DepositHandler();
 
-    /** Gestiona la migración del cartógrafo hacia otra aldea. */
+    /** Handles cartographer migration toward another village. */
     @Unique private final MigrationHandler migrationHandler = new MigrationHandler();
 
-    /** Gestiona la huida del aldeano cuando el jugador tiene mala reputación. */
+    /** Handles villager fleeing when the player has bad reputation. */
     @Unique private final FleeHandler fleeHandler = new FleeHandler();
 
     /**
-     * Gestiona el hambre del aldeano. Recibe {@link #migrationHandler} porque
-     * es quien decide y arranca la migración del cartógrafo.
+     * Handles villager hunger. Receives {@link #migrationHandler} because
+     * it is responsible for deciding and triggering cartographer migration.
      */
     @Unique private final HungerHandler hungerHandler = new HungerHandler(migrationHandler);
 
     /**
-     * Gestiona la recogida de ítems del suelo. Recibe {@link #depositHandler} para
-     * consultarle si hay un depósito activo antes de intentar recoger.
+     * Handles picking up items from the ground. Receives {@link #depositHandler}
+     * to check whether a deposit is already in progress before attempting pickup.
      */
     @Unique private final PickupHandler pickupHandler = new PickupHandler(depositHandler);
 
     /**
-     * Hook principal de tick. Se inyecta al final de {@code customServerAiStep}
-     * para que los handlers del mod corran después de toda la IA vanilla del aldeano.
+     * Instance of the villager decision system based on reinforcement learning (Q-Learning).
+     */
+    @Unique private VillagerBrain brain = null;
+
+    /** Tracks damage received to influence the brain's decisions. */
+    @Unique private final VillagerHurtTracker hurtTracker = new VillagerHurtTracker();
+
+    /** Whether the villager is currently locked into a quest interaction. */
+    @Unique private boolean lockedForQuest = false;
+
+    /** The player involved in the current quest interaction, if any. */
+    @Unique private Player questPlayer = null;
+
+    /** The quest currently active on this villager, if any. */
+    @Unique private ActiveQuest activeQuest = null;
+
+    /** Persistent display name assigned to this villager. */
+    @Unique private String villagerName = null;
+
+    /** Timestamp (ms) until which this villager cannot offer a new quest. */
+    @Unique private long questCooldownUntil = 0L;
+
+    /** Quest cooldown duration: 5 minutes in milliseconds. */
+    private static final long COOLDOWN_MS = 5 * 60 * 1000L;
+
+    /**
+     * Main tick hook. Injected at the end of {@code customServerAiStep} so that
+     * mod handlers run after all vanilla villager AI has executed.
      *
-     * @param level el nivel de servidor del tick actual
-     * @param ci    callback de Mixin (no usado)
+     * <p>If the villager is locked into a quest interaction it stops navigation
+     * and forces the villager to look at the player, then returns early.
+     * Otherwise, it runs all registered handlers and tracks incoming damage for
+     * the brain.
+     *
+     * @param level the server level of the current tick
+     * @param ci    Mixin callback (unused)
      */
     @Inject(at = @At("TAIL"), method = "customServerAiStep")
     private void onTick(ServerLevel level, CallbackInfo ci) {
         Villager self = (Villager) (Object) this;
-        SimpleContainer inv = getOrCreateInventory();
 
+        // If locked for a quest, stand still and look at the player
+        if (lockedForQuest && questPlayer != null) {
+            self.getNavigation().stop();
+            self.getLookControl().setLookAt(
+                    questPlayer,
+                    30.0f,
+                    30.0f
+            );
+            return;
+        }
+
+        VillagerInventoryWrapper inv = getOrCreateWrapper(self);
+
+        // Handlers that must always run, regardless of the brain
         depositHandler.tick(self, level);
         migrationHandler.tick(self, level);
         fleeHandler.tick(self, level);
-        hungerHandler.tick(self, level);
-        pickupHandler.tick(self, level, inv);
+
+        // Detect damage received this tick
+        float currentHealth = self.getHealth();
+        if (lastHealth > 0 && currentHealth < lastHealth) {
+            DamageSource lastSource = self.getLastDamageSource();
+            float dmgAmount = lastHealth - currentHealth;
+            hurtTracker.onHurt(lastSource != null ? lastSource :
+                    level.damageSources().generic(), dmgAmount);
+            // obtain the source of damage if we cannot find it we assign a generic one
+        }
+        lastHealth = currentHealth;
+
+        // The brain decides the remaining actions (hunger, pickup, etc.)
+        // brain = getBrainOrCreate(self);
+        //brain.tick(self, level, inv, hurtTracker, pickupHandler, depositHandler);
     }
 
     /**
-     * Intercepta la interacción del jugador con el aldeano. Cuando el jugador
-     * hace Shift+clic en el lado servidor, abre un menú de cofre 9×1 con el
-     * inventario del aldeano y cancela el comportamiento vanilla (abrir trades).
+     * Intercepts player interaction with the villager. When the player
+     * Shift+clicks on the server side, opens a 9×2 chest menu showing the
+     * villager's full inventory (vanilla + mod slots) and cancels vanilla behaviour.
      *
-     * @param player el jugador que interactúa
-     * @param hand   la mano usada en la interacción
-     * @param cir    callback returnable; se usa para devolver {@link InteractionResult#SUCCESS}
-     *               y cancelar el flujo vanilla
+     * <p>When the player Sprints+clicks, a quest is generated (if none is active
+     * or the previous one was already turned in) and the quest UI packet is sent
+     * to the client. If the villager is still in cooldown, a reminder message is
+     * shown instead.
+     *
+     * @param player the player interacting with the villager
+     * @param hand   the hand used in the interaction
+     * @param cir    returnable callback; used to return {@link InteractionResult#SUCCESS}
+     *               and cancel the vanilla flow
      */
     @Inject(method = "mobInteract", at = @At("HEAD"), cancellable = true)
-    private void onInteract(Player player, InteractionHand hand, CallbackInfoReturnable<InteractionResult> cir) {
+    private void onInteract(Player player, InteractionHand hand, CallbackInfoReturnable<InteractionResult> cir) { //We use the callback to interrupt the vanilla behavior
         Villager self = (Villager) (Object) this;
+
         if (!player.level().isClientSide() && player.isShiftKeyDown()) {
+            //If we are on the server, we open the menu for the player.
+            VillagerInventoryWrapper inv = getOrCreateWrapper(self);
+            inv.syncFromVanilla(); // ensure vanilla slots are up to date
+
             player.openMenu(new SimpleMenuProvider(
                     (syncId, playerInv, p) -> new ChestMenu(
-                            MenuType.GENERIC_9x1, syncId, playerInv, getOrCreateInventory(), 1
+                            MenuType.GENERIC_9x2, syncId, playerInv, inv, 2
                     ),
-                    Component.literal("Inventario del Aldeano")
+                    Component.literal("Villager Inventory") // Show to the user
             ));
+            cir.setReturnValue(InteractionResult.SUCCESS);
+            return;
+        }
+        if (player.isSprinting() && !player.level().isClientSide()) {
+            // If no quest is active, generate one
+            if (activeQuest == null || activeQuest.getState() == QuestState.TURNED_IN) {
+                if (System.currentTimeMillis() < questCooldownUntil) {
+                    // Still on cooldown — notify the player
+                    long remaining = (questCooldownUntil - System.currentTimeMillis()) / 1000;
+                    player.sendSystemMessage(Component.literal(
+                            "" + villagerName + " needs to rest. Come back in " + remaining + "s."
+                    ));
+                    cir.setReturnValue(InteractionResult.SUCCESS);
+                    return;
+                }
+                activeQuest = new ActiveQuest(QuestDefinitions.getRandom());
+                activeQuest.setState(QuestState.AVAILABLE);
+            }
+
+            lockedForQuest = true;
+            questPlayer = player;
+
+            ServerPlayNetworking.send(
+                    (ServerPlayer) player,
+                    new OpenQuestPacket(
+                            activeQuest.getQuest().getLocalizedTitle(),
+                            activeQuest.getQuest().getLocalizedDescription(),
+                            self.getStringUUID(),
+                            activeQuest.getState().name(),
+                            activeQuest.getProgressText(),
+                            activeQuest.getQuest().requiresReturn(),
+                            getOrCreateName()
+                    )
+            );
             cir.setReturnValue(InteractionResult.SUCCESS);
         }
     }
 
     /**
-     * Persiste el inventario del aldeano en NBT al guardar la entidad.
-     * Solo serializa los slots no vacíos para minimizar el tamaño del NBT.
-     * Si el inventario nunca fue inicializado (aldeano sin ítems), no escribe nada.
+     * Persists mod slots (8–17) and the brain's social points to NBT.
      *
-     * @param output destino de escritura NBT proporcionado por Minecraft
-     * @param ci     callback de Mixin (no usado)
+     * <p>Also saves the active quest state (ID, progress, state, and target village
+     * coordinates) and the quest cooldown timestamp so they survive world restarts.
+     *
+     * @param output NBT write target provided by Minecraft
+     * @param ci     Mixin callback (unused)
      */
     @Inject(method = "addAdditionalSaveData", at = @At("TAIL"))
     private void onSave(ValueOutput output, CallbackInfo ci) {
-        if (inventory == null) return;
-        ValueOutput.ValueOutputList list = output.childrenList("VillagerInventory");
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
-            ItemStack stack = inventory.getItem(i);
+        if (wrapperInventory == null) return;
+
+        ValueOutput.ValueOutputList list = output.childrenList("VillagerModInventory");
+        for (int i = 8; i < wrapperInventory.getContainerSize(); i++) {
+            ItemStack stack = wrapperInventory.getItem(i);
             if (!stack.isEmpty()) {
                 ValueOutput slot = list.addChild();
                 slot.putInt("Slot", i);
                 slot.store("Item", ItemStack.CODEC, stack);
             }
         }
+        if (brain != null) {
+            output.putInt("SocialPoints", brain.getSocialPoints());
+        }
+        if (villagerName != null) {
+            output.putString("VillagerName", villagerName);
+        }
+        if (activeQuest != null) {
+            output.putString("ActiveQuestId", activeQuest.getQuestId());
+            output.putString("ActiveQuestState", activeQuest.getState().name());
+            output.putInt("ActiveQuestProgress", activeQuest.getProgress());
+            if (activeQuest.getVillageName() != null) {
+                output.putString("ActiveQuestVillage", activeQuest.getVillageName());
+                output.putInt("ActiveQuestVillageX", activeQuest.getVillageCenter().getX());
+                output.putInt("ActiveQuestVillageY", activeQuest.getVillageCenter().getY());
+                output.putInt("ActiveQuestVillageZ", activeQuest.getVillageCenter().getZ());
+            }
+        }
+        output.putLong("QuestCooldownUntil", questCooldownUntil);
     }
 
     /**
-     * Restaura el inventario del aldeano desde NBT al cargar la entidad.
-     * Si la clave {@code "VillagerInventory"} no existe en el NBT (aldeano antiguo
-     * o sin ítems guardados), no ocurre nada.
+     * Restores mod slots (8–17), social points, and active quest data from NBT.
      *
-     * @param input fuente de lectura NBT proporcionada por Minecraft
-     * @param ci    callback de Mixin (no usado)
+     * <p>If a saved quest village is found, its name and centrer coordinates are
+     * also restored so the quest compass remains accurate after reload.
+     *
+     * @param input NBT read source provided by Minecraft
+     * @param ci    Mixin callback (unused)
      */
     @Inject(method = "readAdditionalSaveData", at = @At("TAIL"))
     private void onLoad(ValueInput input, CallbackInfo ci) {
-        input.childrenList("VillagerInventory").ifPresent(list -> {
-            getOrCreateInventory();
+        input.childrenList("VillagerModInventory").ifPresent(list -> {
+            Villager self = (Villager) (Object) this;
+            VillagerInventoryWrapper inv = getOrCreateWrapper(self);
+            villagerName = input.getStringOr("VillagerName", "");
+            if (villagerName.isEmpty()) villagerName = null;
             list.stream().forEach(slot -> {
                 int index = slot.getIntOr("Slot", -1);
-                if (index >= 0 && index < inventory.getContainerSize()) {
+                if (index >= 8 && index < inv.getContainerSize()) {
                     slot.read("Item", ItemStack.CODEC)
-                            .ifPresent(stack -> inventory.setItem(index, stack));
+                            .ifPresent(stack -> inv.setItem(index, stack));
                 }
             });
         });
+
+        int savedPoints = input.getIntOr("SocialPoints", 0);
+        if (savedPoints > 0) {
+            Villager self = (Villager) (Object) this;
+            brain = getBrainOrCreate(self);
+            brain.setSocialPoints(savedPoints);
+        }
+        String questId = input.getStringOr("ActiveQuestId", "");
+        if (!questId.isEmpty()) {
+            String stateName = input.getStringOr("ActiveQuestState", "IN_PROGRESS");
+            int progress = input.getIntOr("ActiveQuestProgress", 0);
+            QuestState state = QuestState.valueOf(stateName);
+            activeQuest = ActiveQuest.fromId(questId, state, progress);
+
+            String questVillage = input.getStringOr("ActiveQuestVillage", "");
+            if (!questVillage.isEmpty()) {
+                int vx = input.getIntOr("ActiveQuestVillageX", 0);
+                int vy = input.getIntOr("ActiveQuestVillageY", 0);
+                int vz = input.getIntOr("ActiveQuestVillageZ", 0);
+                activeQuest.setVillageName(questVillage);
+                activeQuest.setVillageCenter(new BlockPos(vx, vy, vz));
+            }
+        }
+        questCooldownUntil = input.getLongOr("QuestCooldownUntil", 0L);
     }
 
     /**
-     * Devuelve el inventario del aldeano, creándolo si aún no existe.
-     * Se usa en todos los puntos que necesitan acceder al inventario para
-     * garantizar que nunca sea {@code null}.
+     * Returns the existing inventory wrapper, or creates and caches one if it
+     * does not yet exist.
      *
-     * @return el {@link SimpleContainer} de 9 slots del aldeano
+     * @param self the current villager entity
+     * @return wrapper combining the vanilla inventory with mod slots
      */
     @Unique
-    private SimpleContainer getOrCreateInventory() {
-        if (inventory == null) inventory = new SimpleContainer(9);
-        return inventory;
+    private VillagerInventoryWrapper getOrCreateWrapper(Villager self) {
+        if (wrapperInventory == null) {
+            wrapperInventory = new VillagerInventoryWrapper(
+                    ((InventoryCarrier) self).getInventory()
+            );
+        }
+        return wrapperInventory;
+    }
+
+    /**
+     * Returns the existing villager brain, or creates and caches one if it
+     * does not yet exist.
+     *
+     * @param self the current villager entity
+     * @return the {@link VillagerBrain} instance associated with this villager
+     */
+    @Unique
+    private VillagerBrain getBrainOrCreate(Villager self) {
+        if (brain == null) {
+            brain = new VillagerBrain(self.getStringUUID());
+        }
+        return brain;
+    }
+
+    /**
+     * Unlocks the villager from a quest interaction, clearing both the lock flag
+     * and the reference to the interacting player.
+     */
+    @Override
+    public void lnathan$unlock() {
+        lockedForQuest = false;
+        questPlayer = null;
+    }
+
+    /**
+     * Handles quest turn-in. Removes the required items from the player's inventory,
+     * grants the quest reward, shows a completion toast, marks the quest as turned in,
+     * and starts the cooldown timer.
+     *
+     * @param player the server player turning in the quest
+     */
+    @Override
+    public void lnathan$turnInQuest(ServerPlayer player) {
+        if (activeQuest != null && activeQuest.getState() == QuestState.READY_TO_TURN_IN) {
+            QuestTracker.removeItems(player, activeQuest.getQuest());
+            activeQuest.getQuest().getReward().giveToPlayer(player);
+            ModToast.mostrarToast(player);
+            activeQuest.setState(QuestState.TURNED_IN);
+            questCooldownUntil = System.currentTimeMillis() + COOLDOWN_MS;
+        }
+        lockedForQuest = false;
+        questPlayer = null;
+    }
+
+    /**
+     * Accepts a quest on behalf of the player. Transitions the quest state from
+     * {@link QuestState#AVAILABLE} to {@link QuestState#IN_PROGRESS} and assigns
+     * the nearest known village as the quest target.
+     *
+     * @param player the server player accepting the quest
+     */
+    @Override
+    public void lnathan$acceptQuest(ServerPlayer player) {
+        if (activeQuest != null && activeQuest.getState() == QuestState.AVAILABLE) {
+            activeQuest.setState(QuestState.IN_PROGRESS);
+
+            VillageRegistry.getVillages(player).stream()
+                    .min((a, b) -> {
+                        double distA = a.getCenter().distSqr(player.blockPosition());
+                        double distB = b.getCenter().distSqr(player.blockPosition());
+                        return Double.compare(distA, distB);
+                    })
+                    .ifPresent(village -> {
+                        activeQuest.setVillageName(village.getName());
+                        activeQuest.setVillageCenter(village.getCenter());
+                        Mod.LOGGER.info("Quest assigned to village: " + village.getName());
+                    });
+
+            if (activeQuest.getVillageName() == null) {
+                Mod.LOGGER.info("No village found near player when accepting quest!");
+            }
+        }
+        lockedForQuest = false;
+        questPlayer = null;
+    }
+
+    /**
+     * Returns a serialised string representing the active quest entry for the
+     * quest log UI, or {@code null} if there is no active quest or the quest
+     * has not yet been accepted.
+     *
+     * <p>Format: {@code title|progressText|stateName|villagerName|villageName:x:z}
+     * The village segment is omitted when no target village has been assigned.
+     *
+     * @return the quest log entry string, or {@code null}
+     */
+    @Override
+    public String lnathan$getActiveQuestEntry() {
+        if (activeQuest == null) return null;
+        if (activeQuest.getState() == QuestState.AVAILABLE) return null;
+
+        String villageInfo = "";
+        if (activeQuest.getVillageName() != null && activeQuest.getVillageCenter() != null) {
+            villageInfo = activeQuest.getVillageName()
+                    + ":" + activeQuest.getVillageCenter().getX()
+                    + ":" + activeQuest.getVillageCenter().getZ();
+        }
+
+        return activeQuest.getQuest().getTitle()
+                + "|" + activeQuest.getProgressText()
+                + "|" + activeQuest.getState().name()
+                + "|" + getOrCreateName()
+                + "|" + villageInfo;
+    }
+
+    /**
+     * Checks and updates progress for the active quest. Does nothing if there is
+     * no active quest or it is not currently {@link QuestState#IN_PROGRESS}.
+     *
+     * @param player the server player to check progress for
+     * @param level  the server level in which the check is performed
+     */
+    @Override
+    public void lnathan$checkQuestProgress(ServerPlayer player, ServerLevel level) {
+        if (activeQuest == null) return;
+        if (activeQuest.getState() != QuestState.IN_PROGRESS) return;
+
+        QuestTracker.checkProgress(player, (Villager)(Object)this, activeQuest);
+    }
+
+    /**
+     * Returns the villager's display name, generating and caching one from
+     * {@link VillagerNamePool} if none has been assigned yet.
+     *
+     * @return the villager's name; never {@code null}
+     */
+    @Unique
+    private String getOrCreateName() {
+        if (villagerName == null) {
+            villagerName = VillagerNamePool.getRandom();
+        }
+        return villagerName;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @return the villager's persistent display name; never {@code null}
+     */
+    @Override
+    public String lnathan$getVillagerName() {
+        return getOrCreateName();
     }
 }

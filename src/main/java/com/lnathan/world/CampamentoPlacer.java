@@ -17,51 +17,51 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Coordinador de alto nivel que construye un campamento completo en el mundo.
+ * High-level coordinator that builds a complete camp in the world.
  *
- * <p>Recibe un área de 50×50 bloques (esquina NW) y ejecuta todo el proceso de
- * generación en el hilo principal del servidor (garantizado por {@link ModWorldGen}):
+ * <p>Receives a 50×50 block area (NW corner) and runs the entire generation
+ * process on the main server thread (guaranteed by {@link ModWorldGen}):
  * <ol>
- *   <li>Busca posiciones válidas para cada carpa dentro del área, respetando la
- *       separación mínima entre ellas.</li>
- *   <li>Delega la construcción de cada carpa a {@link CampamentoStructure}.</li>
- *   <li>Coloca la campana central del campamento en el centro geométrico del área.</li>
- *   <li>Spawnea un aldeano por carpa y le asigna las tres memorias del Brain:
- *       {@code HOME}, {@code JOB_SITE} y {@code MEETING_POINT}.</li>
- *   <li>Traza caminos de dirt path entre carpas consecutivas con vallas en caídas.</li>
+ *   <li>Finds valid positions for each tent within the area, respecting the
+ *       minimum separation between them.</li>
+ *   <li>Delegates the construction of each tent to {@link CampamentoStructure}.</li>
+ *   <li>Places the camp's central bell at the geometric center of the area.</li>
+ *   <li>Spawns one villager per tent and assigns the three Brain memories:
+ *       {@code HOME}, {@code JOB_SITE}, and {@code MEETING_POINT}.</li>
+ *   <li>Traces dirt path roads between consecutive tents, with fences at drop-offs.</li>
  * </ol>
  *
- * <p><b>Hilo de ejecución:</b> todos los métodos de esta clase deben llamarse desde
- * el hilo principal del servidor. {@link ModWorldGen} garantiza esto procesando las
- * tareas pendientes en {@code END_SERVER_TICK}.
+ * <p><b>Execution thread:</b> all methods in this class must be called from the
+ * main server thread. {@link ModWorldGen} guarantees this by processing pending
+ * tasks in {@code END_SERVER_TICK}.
  */
 public class CampamentoPlacer {
 
     /**
-     * Lado del área cuadrada donde se intentan colocar las carpas, en bloques.
-     * El área real del campamento es {@code AREA × AREA} = 2500 bloques.
+     * Side length of the square area where tents are placed, in blocks.
+     * The actual camp area is {@code AREA × AREA} = 2500 blocks.
      */
     private static final int AREA = 50;
 
     /**
-     * Distancia mínima en bloques entre los orígenes de dos carpas.
-     * Con carpas de 7×7, 14 bloques deja un pequeño pasillo entre ellas y evita
-     * que se superpongan visualmente.
+     * Minimum distance in blocks between the origins of two tents.
+     * With 7×7 tents, 14 blocks leaves a small passage between them and prevents
+     * them from visually overlapping.
      */
     private static final int SEPARACION_CARPAS = 14;
 
     /**
-     * Construye el campamento completo en el área indicada.
+     * Builds the complete camp in the specified area.
      *
-     * <p>El proceso falla de forma silenciosa (sin lanzar excepciones) si no se
-     * pueden colocar carpas válidas — por ejemplo, en terreno acuático o con demasiados
-     * obstáculos. En ese caso simplemente no se genera nada.
+     * <p>The process fails silently (without throwing exceptions) if no valid
+     * tent positions can be found — for example, on aquatic terrain or with too many
+     * obstacles. In that case, nothing is generated.
      *
-     * @param level  el nivel overworld donde se construye el campamento
-     * @param origen esquina noroeste del área 50×50; las carpas se distribuyen
-     *               dentro de esta área
-     * @param random fuente de aleatoriedad derivada de la seed del chunk, para
-     *               garantizar que el mismo chunk siempre genere el mismo campamento
+     * @param level  the overworld level where the camp is built
+     * @param origen the northwest corner of the 50×50 area; tents are distributed
+     *               within this area
+     * @param random randomness source derived from the chunk seed, to ensure that
+     *               the same chunk always generates the same camp
      */
     public static void place(ServerLevel level, BlockPos origen, RandomSource random) {
         //System.out.println("[CampamentoPlacer] Iniciando place en " + origen);
@@ -76,11 +76,11 @@ public class CampamentoPlacer {
         for (int i = 0; i < numCarpas; i++) {
             //System.out.println("[CampamentoPlacer] Buscando posicion carpa " + i);
 
-            // Buscamos una posición XZ válida dentro del área
+            // Find a valid XZ position within the area
             BlockPos posCarpa = encontrarPosicionCarpa(level, origen, random, posicionesCarpas);
             if (posCarpa == null) { //System.out.println("[CampamentoPlacer] No encontro posicion libre"); continue; }
 
-                // Ajustamos la Y al suelo real y filtramos agua o arena bajo el mar
+                // Adjust Y to the actual ground and filter out water or below-sea sand
                 posCarpa = encontrarYSolida(level, posCarpa);
                 if (posCarpa == null) {
                     //System.out.println("[CampamentoPlacer] No encontro Y solida");
@@ -90,28 +90,28 @@ public class CampamentoPlacer {
 
             //System.out.println("[CampamentoPlacer] Colocando carpa en " + posCarpa);
 
-            // CampamentoStructure valida obstáculos, irregularidad del terreno
-            // y construye la carpa. Devuelve null si no es viable.
-            CampamentoStructure.carpaSize tamaño = random.nextInt(5) == 0
-                    ? CampamentoStructure.carpaSize.GRANDE
-                    : CampamentoStructure.carpaSize.CHICA;
+            // CampamentoStructure validates obstacles, terrain irregularity,
+            // and builds the tent. Returns null if not viable.
+            CampamentoStructure.TentSize tamaño = random.nextInt(5) == 0
+                    ? CampamentoStructure.TentSize.LARGE
+                    : CampamentoStructure.TentSize.SMALL;
             CampamentoStructure.PlaceResult resultado = CampamentoStructure.place(level, posCarpa, random, tamaño);
             if (resultado == null) continue;
 
             posicionesCarpas.add(posCarpa);
-            posicionesMesas.add(resultado.posMesa());
-            // La posición real de la cama viene de CampamentoStructure para que
-            // la memoria HOME del aldeano apunte al bloque correcto según el terreno
-            posicionesCamas.add(resultado.posCama());
+            posicionesMesas.add(resultado.workStationPos());
+            // The actual bed position comes from CampamentoStructure so that
+            // the villager's HOME memory points to the correct block based on terrain
+            posicionesCamas.add(resultado.bedPos());
         }
 
         //System.out.println("[CampamentoPlacer] Carpas colocadas: " + posicionesCarpas.size());
         if (posicionesCarpas.isEmpty()) return;
 
-        // Campana central
-        // Se coloca en el centro geométrico del área 50×50, a ras del suelo.
-        // Si el chunk central no está cargado (improbable gracias al TICKS_ESPERA
-        // de ModWorldGen), usamos el above() de la primera carpa como fallback.
+        // Central bell
+        // Placed at the geometric center of the 50×50 area, flush with the ground.
+        // If the central chunk is not loaded (unlikely thanks to ModWorldGen's TICKS_ESPERA),
+        // we use the above() of the first tent as a fallback.
         BlockPos centro = origen.offset(AREA / 2, 0, AREA / 2);
         BlockPos campanaPos = posicionesCarpas.get(0).above();
         if (level.isLoaded(centro)) {
@@ -119,72 +119,72 @@ public class CampamentoPlacer {
                     net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
                     centro.getX(), centro.getZ()
             );
-            // y es la primera posición de aire sobre el suelo — colocamos la campana ahí
+            // y is the first air position above the ground — place the bell there
             campanaPos = new BlockPos(centro.getX(), y, centro.getZ());
             level.setBlock(campanaPos, Blocks.BELL.defaultBlockState(), 3);
         }
 
-        // Aldeanos — uno por carpa con memorias Brain asignadas directamente
+        // Villagers — one per tent with Brain memories assigned directly
         final BlockPos campanaFinal = campanaPos;
         for (int i = 0; i < posicionesCarpas.size(); i++) {
             spawnearAldeano(level, posicionesCarpas.get(i).above(),
                     posicionesCamas.get(i), posicionesMesas.get(i), campanaFinal);
         }
 
-        // Caminos — se trazan después del spawn para no interferir con él
+        // Paths — traced after spawning to avoid interfering with it
         trazarCaminos(level, posicionesCarpas, random);
 
         //System.out.println("[CampamentoPlacer] Campamento listo en " + origen);
     }
 
     /**
-     * Traza caminos de dirt path entre todas las carpas consecutivas del campamento.
+     * Traces dirt path roads between all consecutive tents in the camp.
      *
-     * <p>El camino no es recto: se añade ±1 bloque de error aleatorio en X y Z en
-     * cada paso para que parezca orgánico. El ancho es de ~3 bloques con bordes
-     * irregulares (algunas esquinas se omiten al azar).
+     * <p>The path is not straight: a random ±1 block jitter is applied to X and Z
+     * at each step to give it an organic appearance. The width is ~3 blocks with
+     * irregular edges (some corners are randomly skipped).
      *
-     * <p>Manejo de desniveles: si el bloque del suelo o el inmediatamente inferior
-     * es aire, se coloca una valla de roble en lugar de path para señalar el borde
-     * de una caída. Esto evita que el camino "flote" sobre vacíos.
+     * <p>Drop-off handling: if the ground block or the one directly below it is air,
+     * an oak fence is placed instead of path to mark the edge of a drop-off.
+     * This prevents the path from "floating" over voids.
      *
-     * @param level  el nivel donde colocar los bloques de camino
-     * @param carpas lista de posiciones de origen de las carpas (esquinas NW)
-     * @param random fuente de aleatoriedad para el jitter del trazado
+     * @param level  the level where path blocks are placed
+     * @param carpas list of tent origin positions (NW corners)
+     * @param random randomness source for path jitter
      */
     private static void trazarCaminos(ServerLevel level, List<BlockPos> carpas, RandomSource random) {
         for (int i = 0; i < carpas.size() - 1; i++) {
             BlockPos desde = carpas.get(i);
             BlockPos hasta = carpas.get(i + 1);
 
-            // Usamos el centro de cada carpa (offset +3) como punto de inicio/fin
+            // Use the center of each tent (offset +3) as the start/end point
             int x0 = desde.getX() + 3;
             int z0 = desde.getZ() + 3;
             int x1 = hasta.getX() + 3;
             int z1 = hasta.getZ() + 3;
 
-            // El número de pasos es la distancia Chebyshev entre los dos centros,
-            // lo que garantiza que el camino se dibuje sin saltos
+            // The number of steps is the Chebyshev distance between the two centers,
+            // ensuring the path is drawn without gaps
             int pasos = Math.max(Math.abs(x1 - x0), Math.abs(z1 - z0));
             if (pasos == 0) continue;
 
             for (int paso = 0; paso <= pasos; paso++) {
                 float t = (float) paso / pasos;
 
-                // Interpolación lineal con jitter ±1 para el efecto "torcido"
+                // Linear interpolation with ±1 jitter for the "crooked" effect
                 int cx = Math.round(x0 + (x1 - x0) * t) + (random.nextInt(3) - 1);
                 int cz = Math.round(z0 + (z1 - z0) * t) + (random.nextInt(3) - 1);
 
-                // Pintar un parche 3×3 centrado en (cx, cz)
+                // Paint a 3×3 patch centered at (cx, cz)
                 for (int dx = -1; dx <= 1; dx++) {
                     for (int dz = -1; dz <= 1; dz++) {
-                        // Saltar ~33% de las esquinas para que el borde no sea cuadrado
+                        // Skip ~33% of corners so the edge is not perfectly square
                         if (Math.abs(dx) == 1 && Math.abs(dz) == 1 && random.nextInt(3) == 0) continue;
 
                         int bx = cx + dx;
                         int bz = cz + dz;
 
-                        // Heightmap da la primera posición de aire sobre el terreno sólido
+                        // Heightmap gives the first air position above solid terrain
                         int by = level.getHeight(
                                 net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
                                 bx, bz
@@ -194,14 +194,14 @@ public class CampamentoPlacer {
                         BlockPos dosAbajo = new BlockPos(bx, by - 2, bz);
 
                         if (level.getBlockState(abajo).isAir() || level.getBlockState(dosAbajo).isAir()) {
-                            // Hay una caída — ponemos valla encima del último bloque sólido
+                            // There is a drop — place a fence on top of the last solid block
                             BlockPos valla = new BlockPos(bx, by - 1, bz);
                             if (level.getBlockState(valla).isAir()) {
                                 level.setBlock(valla, Blocks.OAK_FENCE.defaultBlockState(), 3);
                             }
                         } else {
-                            // Terreno normal — convertimos el bloque superior a dirt path
-                            // Solo reemplazamos bloques naturales, nunca estructuras o tablones
+                            // Normal terrain — convert the top block to dirt path.
+                            // Only replace natural blocks, never structures or planks.
                             BlockPos pathPos = new BlockPos(bx, by - 1, bz);
                             BlockState actual = level.getBlockState(pathPos);
                             if (actual.is(Blocks.GRASS_BLOCK) || actual.is(Blocks.DIRT)
@@ -218,25 +218,25 @@ public class CampamentoPlacer {
     }
 
     /**
-     * Busca una posición XZ libre dentro del área 50×50 donde colocar una nueva carpa.
+     * Finds a free XZ position within the 50×50 area to place a new tent.
      *
-     * <p>Hace hasta 20 intentos aleatorios por carpa. Una posición es válida si está
-     * al menos a {@link #SEPARACION_CARPAS} bloques de todas las carpas ya colocadas.
-     * Se deja un margen de 8 bloques en los bordes del área para que la carpa no
-     * se salga de los límites.
+     * <p>Makes up to 20 random attempts per tent. A position is valid if it is at
+     * least {@link #SEPARACION_CARPAS} blocks away from all already-placed tents.
+     * An 8-block margin is kept from the area borders so the tent does not exceed
+     * the bounds.
      *
-     * @param level      el nivel (no usado directamente, incluido para coherencia)
-     * @param origen     esquina NW del área 50×50
-     * @param random     fuente de aleatoriedad
-     * @param existentes posiciones ya ocupadas por carpas previas
-     * @return una posición XZ candidata (Y=0, se ajusta después con
-     * {@link #encontrarYSolida}), o {@code null} si no se encontró
-     * ninguna válida en 20 intentos
+     * @param level      the level (not used directly; included for consistency)
+     * @param origen     the NW corner of the 50×50 area
+     * @param random     randomness source
+     * @param existentes positions already occupied by previous tents
+     * @return a candidate XZ position (Y=0, adjusted later by
+     *         {@link #encontrarYSolida}), or {@code null} if no valid position
+     *         was found within 20 attempts
      */
     private static BlockPos encontrarPosicionCarpa(ServerLevel level, BlockPos origen,
                                                    RandomSource random, List<BlockPos> existentes) {
         for (int intento = 0; intento < 20; intento++) {
-            // Dejamos un margen de 8 bloques en el borde para que la carpa no salga del área
+            // Keep an 8-block margin at the border so the tent stays within the area
             int x = random.nextInt(AREA - 8);
             int z = random.nextInt(AREA - 8);
             BlockPos candidata = origen.offset(x, 0, z);
@@ -259,21 +259,21 @@ public class CampamentoPlacer {
     }
 
     /**
-     * Usa el heightmap {@code MOTION_BLOCKING_NO_LEAVES} para encontrar la Y del
-     * suelo en la posición XZ dada y devuelve la posición con la Y ajustada.
+     * Uses the {@code MOTION_BLOCKING_NO_LEAVES} heightmap to find the ground Y
+     * at the given XZ position and returns the position with the adjusted Y.
      *
-     * <p>Filtra posiciones que serían inválidas para una carpa:
+     * <p>Filters positions that would be invalid for a tent:
      * <ul>
-     *   <li>Y &lt; 60: probablemente bajo el mar o en cueva profunda.</li>
-     *   <li>Y &gt; 200: montaña demasiado alta.</li>
-     *   <li>Agua o seagrass en el suelo: carpa flotando en el mar.</li>
-     *   <li>Arena bajo Y=63: zona de playa inundada o fondo marino.</li>
+     *   <li>Y &lt; 60: likely below sea level or in a deep cave.</li>
+     *   <li>Y &gt; 200: mountain too high.</li>
+     *   <li>Water or seagrass on the ground: tent would float over the sea.</li>
+     *   <li>Sand below Y=63: flooded beach or sea floor.</li>
      * </ul>
      *
-     * @param level el nivel donde consultar el heightmap
-     * @param pos   posición XZ de la que se quiere conocer la Y del suelo
-     * @return {@link BlockPos} con la Y de la superficie, o {@code null} si la
-     * posición no es apta para una carpa
+     * @param level the level where the heightmap is queried
+     * @param pos   XZ position for which the ground Y is needed
+     * @return a {@link BlockPos} with the surface Y, or {@code null} if the
+     *         position is not suitable for a tent
      */
     private static BlockPos encontrarYSolida(ServerLevel level, BlockPos pos) {
         int y = level.getHeight(
@@ -291,28 +291,28 @@ public class CampamentoPlacer {
     }
 
     /**
-     * Crea y configura un aldeano en la posición indicada.
+     * Creates and configures a villager at the specified position.
      *
-     * <p>Asigna directamente las tres memorias del Brain que el aldeano necesita para
-     * participar en el ciclo de vida de aldea:
+     * <p>Directly assigns the three Brain memories the villager needs to participate
+     * in the village lifecycle:
      * <ul>
-     *   <li>{@link MemoryModuleType#HOME} → cabecera de la cama (dónde dormir).</li>
-     *   <li>{@link MemoryModuleType#JOB_SITE} → mesa de trabajo (dónde adoptar profesión).</li>
-     *   <li>{@link MemoryModuleType#MEETING_POINT} → campana (dónde reunirse).</li>
+     *   <li>{@link MemoryModuleType#HOME} → bed headboard position (where to sleep).</li>
+     *   <li>{@link MemoryModuleType#JOB_SITE} → work table position (where to adopt a profession).</li>
+     *   <li>{@link MemoryModuleType#MEETING_POINT} → bell position (where to gather).</li>
      * </ul>
      *
-     * <p>Sin estas memorias el aldeano vagará sin rumbo y no adoptará ningún
-     * comportamiento de aldea vanilla. Se usa asignación directa porque no hay
-     * acceso a las loot tables de POI en este contexto de generación.
+     * <p>Without these memories the villager will wander aimlessly and will not adopt
+     * any vanilla village behavior. Direct assignment is used because there is no
+     * access to POI loot tables in this generation context.
      *
-     * <p>La actividad inicial {@link Activity#IDLE} permite que el Brain empiece
-     * a evaluar sus propias actividades inmediatamente.
+     * <p>The initial activity {@link Activity#IDLE} allows the Brain to start
+     * evaluating its own activities immediately.
      *
-     * @param level   el nivel donde añadir el aldeano
-     * @param pos     posición de spawn (encima de la carpa)
-     * @param cama    posición de la cabecera de la cama ({@code HOME})
-     * @param mesa    posición de la mesa de trabajo ({@code JOB_SITE})
-     * @param campana posición de la campana central ({@code MEETING_POINT})
+     * @param level   the level where the villager is added
+     * @param pos     spawn position (above the tent)
+     * @param cama    position of the bed headboard ({@code HOME})
+     * @param mesa    position of the work table ({@code JOB_SITE})
+     * @param campana position of the central bell ({@code MEETING_POINT})
      */
     private static void spawnearAldeano(ServerLevel level, BlockPos pos,
                                         BlockPos cama, BlockPos mesa, BlockPos campana) {
@@ -324,8 +324,8 @@ public class CampamentoPlacer {
         aldeano.getBrain().setMemory(MemoryModuleType.HOME, GlobalPos.of(level.dimension(), cama));
         aldeano.getBrain().setMemory(MemoryModuleType.JOB_SITE, GlobalPos.of(level.dimension(), mesa));
         aldeano.getBrain().setMemory(MemoryModuleType.MEETING_POINT, GlobalPos.of(level.dimension(), campana));
-        // IDLE permite que el Brain empiece a evaluar sus propias actividades
-        // en lugar de quedarse congelado esperando una actividad asignada
+        // IDLE lets the Brain start evaluating its own activities instead of
+        // freezing while waiting for an externally assigned activity
         aldeano.getBrain().setActiveActivityIfPossible(Activity.IDLE);
         level.addFreshEntity(aldeano);
     }

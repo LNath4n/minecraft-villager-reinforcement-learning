@@ -1,0 +1,59 @@
+{
+  "quest.mod.madera_invierno.title": "Madera para el invierno",
+  "quest.mod.madera_invierno.description": "Necesito 10 troncos de roble antes de que llegue el frío. ¿Me ayudas?",
+
+  "quest.mod.suministros_medicos.title": "Suministros médicos",
+  "quest.mod.suministros_medicos.description": "Necesito 5 amapolas para preparar medicinas. Tráemelas cuando las tengas.",
+
+  "quest.mod.minerales_escasos.title": "Minerales escasos",
+  "quest.mod.minerales_escasos.description": "Los herreros del pueblo necesitan hierro. Consígueme 3 lingotes y te recompensaré bien.",
+
+  "quest.mod.journal.title": "Diario de Misiones",
+  "quest.mod.journal.active": "Activas",
+  "quest.mod.journal.ready": "Por entregar",
+  "quest.mod.journal.completed": "Completadas",
+  "quest.mod.journal.empty": "Sin misiones en esta categoría",
+
+  "quest.mod.map.title": "Mapa del Mundo",
+  "quest.mod.map.legend.player": "● Tú",
+  "quest.mod.map.legend.village": "● Aldea",
+  "quest.mod.map.distance": "Distancia: %s bloques",
+  "quest.mod.map.missions_count": "Misiones (%s):",
+  "quest.mod.map.no_missions": "Sin misiones activas",
+
+  "quest.mod.toast.title": "¡Misión aceptada!",
+  "quest.mod.toast.subtitle": "Recolectar recursos",
+
+  "quest.mod.accept": "Aceptar",
+  "quest.mod.deny": "Negar",
+  "quest.mod.deliver": "Entregar",
+  "quest.mod.close": "Cerrar",
+  "quest.mod.progress": "Progreso: ",
+
+  "village.mod.prefix.1": "Aldea de",
+  "village.mod.prefix.2": "Pueblo de",
+  "village.mod.prefix.3": "Villa de",
+  "village.mod.prefix.4": "Refugio de",
+  "village.mod.prefix.5": "Asentamiento de",
+
+  "village.mod.name.1": "la Piedra",
+  "village.mod.name.2": "los Robles",
+  "village.mod.name.3": "la Colina",
+  "village.mod.name.4": "los Vientos",
+  "village.mod.name.5": "la Luna",
+  "village.mod.name.6": "los Pinos",
+  "village.mod.name.7": "las Aguas",
+  "village.mod.name.8": "la Niebla",
+  "village.mod.name.9": "los Cedros",
+  "village.mod.name.10": "las Estrellas",
+  "village.mod.name.11": "la Aurora",
+  "village.mod.name.12": "los Valles",
+  "village.mod.name.13": "la Forja",
+  "village.mod.name.14": "los Campos",
+  "village.mod.name.15": "el Río",
+  "village.mod.name.16": "la Tormenta",
+  "village.mod.name.17": "los Álamos",
+  "village.mod.name.18": "la Sombra",
+  "village.mod.name.19": "los Cuervos",
+  "village.mod.name.20": "el Musgo"
+}
