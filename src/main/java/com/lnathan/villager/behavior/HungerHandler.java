@@ -91,7 +91,8 @@ public class HungerHandler {
      */
     public void tick(Villager self, ServerLevel level) {
         boolean hungry = self.wantsMoreFood();
-
+        hungry = false;
+        
         // Only modify the attribute when the state changes — not every tick
         if (hungry != wasHungry) {
             wasHungry = hungry;

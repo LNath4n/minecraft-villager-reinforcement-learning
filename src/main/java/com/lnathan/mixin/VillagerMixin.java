@@ -9,6 +9,7 @@ import com.lnathan.villager.VillagerNamePool;
 import com.lnathan.villager.brian.VillagerBrain;
 import com.lnathan.villager.behavior.*;
 import com.lnathan.villager.brian.VillagerHurtTracker;
+import com.lnathan.villager.bt.*;
 import com.lnathan.villager.quests.ActiveQuest;
 import com.lnathan.villager.quests.QuestDefinitions;
 import com.lnathan.villager.quests.QuestState;
@@ -34,6 +35,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+import java.util.List;
 
 /**
  * Main entry point for the modified villager behaviour.
@@ -124,6 +127,33 @@ public class VillagerMixin implements LockableVillager {
     /** Quest cooldown duration: 5 minutes in milliseconds. */
     private static final long COOLDOWN_MS = 5 * 60 * 1000L;
 
+
+    @Unique private BTNode behaviorTree = null;
+
+    @Unique private int lodTickCounter = 0;
+    @Unique private int lodInterval = 1;
+
+
+    @Unique
+    private BTNode getOrCreateTree(Villager self) {
+        if (behaviorTree != null) return behaviorTree;
+
+        VillagerInventoryWrapper inv = getOrCreateWrapper(self);
+        VillagerBrain br = getBrainOrCreate(self);
+
+        behaviorTree = new SelectorNode(List.of(
+                new SleepNode(),
+                new FleeNode(fleeHandler,hurtTracker),
+                new MigrationNode(migrationHandler),
+                new DepositNode(depositHandler),
+                new HungerNode(hungerHandler),
+                new PickupNode(pickupHandler, inv),
+                new DQNNode(br, inv, hurtTracker, pickupHandler, depositHandler)
+        ));
+
+        return behaviorTree;
+    }
+
     /**
      * Main tick hook. Injected at the end of {@code customServerAiStep} so that
      * mod handlers run after all vanilla villager AI has executed.
@@ -140,38 +170,36 @@ public class VillagerMixin implements LockableVillager {
     private void onTick(ServerLevel level, CallbackInfo ci) {
         Villager self = (Villager) (Object) this;
 
-        // If locked for a quest, stand still and look at the player
         if (lockedForQuest && questPlayer != null) {
             self.getNavigation().stop();
-            self.getLookControl().setLookAt(
-                    questPlayer,
-                    30.0f,
-                    30.0f
-            );
+            self.getLookControl().setLookAt(questPlayer, 30f, 30f);
             return;
         }
 
-        VillagerInventoryWrapper inv = getOrCreateWrapper(self);
-
-        // Handlers that must always run, regardless of the brain
-        depositHandler.tick(self, level);
-        migrationHandler.tick(self, level);
-        fleeHandler.tick(self, level);
-
-        // Detect damage received this tick
+        // damage tracking — siempre, sin importar LOD
         float currentHealth = self.getHealth();
         if (lastHealth > 0 && currentHealth < lastHealth) {
-            DamageSource lastSource = self.getLastDamageSource();
-            float dmgAmount = lastHealth - currentHealth;
-            hurtTracker.onHurt(lastSource != null ? lastSource :
-                    level.damageSources().generic(), dmgAmount);
-            // obtain the source of damage if we cannot find it we assign a generic one
+            DamageSource src = self.getLastDamageSource();
+            hurtTracker.onHurt(src != null ? src : level.damageSources().generic(),
+                    lastHealth - currentHealth);
         }
         lastHealth = currentHealth;
 
-        // The brain decides the remaining actions (hunger, pickup, etc.)
-        // brain = getBrainOrCreate(self);
-        //brain.tick(self, level, inv, hurtTracker, pickupHandler, depositHandler);
+        // LOD: intervalo según distancia al jugador más cercano
+        double nearestDistSq = level.players().stream()
+                .mapToDouble(p -> p.distanceToSqr(self))
+                .min()
+                .orElse(Double.MAX_VALUE);
+
+        if      (nearestDistSq < 16 * 16)  lodInterval = 1;
+        else if (nearestDistSq < 48 * 48)  lodInterval = 4;
+        else if (nearestDistSq < 96 * 96)  lodInterval = 10;
+        else                                lodInterval = 20;
+
+        if (++lodTickCounter >= lodInterval) {
+            lodTickCounter = 0;
+            getOrCreateTree(self).tick(self, level);
+        }
     }
 
     /**
@@ -391,6 +419,9 @@ public class VillagerMixin implements LockableVillager {
             ModToast.mostrarToast(player);
             activeQuest.setState(QuestState.TURNED_IN);
             questCooldownUntil = System.currentTimeMillis() + COOLDOWN_MS;
+            getBrainOrCreate((Villager)(Object)this)
+                    .addSocialPoints(activeQuest.getQuest().getReward().getSocialPoints());
+            //System.out.println("[Quest] Turn-in completado — +" + activeQuest.getQuest().getReward().getSocialPoints() + " social points");
         }
         lockedForQuest = false;
         questPlayer = null;
@@ -469,7 +500,8 @@ public class VillagerMixin implements LockableVillager {
         if (activeQuest == null) return;
         if (activeQuest.getState() != QuestState.IN_PROGRESS) return;
 
-        QuestTracker.checkProgress(player, (Villager)(Object)this, activeQuest);
+        QuestTracker.checkProgress(player, (Villager)(Object)this, activeQuest,
+                getBrainOrCreate((Villager)(Object)this));
     }
 
     /**

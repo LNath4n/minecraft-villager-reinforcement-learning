@@ -1,6 +1,7 @@
 package com.lnathan.villager.quests;
 
 import com.lnathan.advancement.ModToast;
+import com.lnathan.villager.brian.VillagerBrain;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.ItemStack;
@@ -39,7 +40,7 @@ public class QuestTracker {
      * @param activeQuest Player's active quest. If {@code null} or not in progress,
      *                    the method does nothing.
      */
-    public static void checkProgress(ServerPlayer player, Villager villager, ActiveQuest activeQuest) {
+    public static void checkProgress(ServerPlayer player, Villager villager, ActiveQuest activeQuest, VillagerBrain brain) {
         if (activeQuest == null) return;
         if (activeQuest.getState() != QuestState.IN_PROGRESS) return;
 
@@ -56,9 +57,11 @@ public class QuestTracker {
                     quest.getReward().giveToPlayer(player);
                     ModToast.mostrarToast(player);
                     activeQuest.setState(QuestState.TURNED_IN);
+                    brain.addSocialPoints(quest.getReward().getSocialPoints());
                 } else {
                     // Marks the quest as ready to turn in and notifies the player
                     activeQuest.setState(QuestState.READY_TO_TURN_IN);
+                    brain.addSocialPoints(quest.getReward().getSocialPoints());
                     player.sendSystemMessage(
                             net.minecraft.network.chat.Component.literal(
                                     "Quest ready to turn in: " + quest.getTitle()

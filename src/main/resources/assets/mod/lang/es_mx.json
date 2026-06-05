@@ -8,6 +8,42 @@
   "quest.mod.minerales_escasos.title": "Minerales escasos",
   "quest.mod.minerales_escasos.description": "Los herreros del pueblo necesitan hierro. Consígueme 3 lingotes y te recompensaré bien.",
 
+  "quest.mod.provisiones_granja.title": "Provisiones de la granja",
+  "quest.mod.provisiones_granja.description": "La cosecha fue mala esta temporada. Necesito 8 zanahorias para alimentar al pueblo durante el invierno.",
+
+  "quest.mod.madera_oscura.title": "Madera oscura",
+  "quest.mod.madera_oscura.description": "Las murallas del pueblo necesitan refuerzo. Tráeme 10 troncos de roble oscuro y te lo agradeceré.",
+
+  "quest.mod.lana_para_camas.title": "Lana para camas",
+  "quest.mod.lana_para_camas.description": "Varias familias perdieron sus camas en el último ataque. Necesito 6 lanas para hacer nuevas.",
+
+  "quest.mod.pan_para_el_pueblo.title": "Pan para el pueblo",
+  "quest.mod.pan_para_el_pueblo.description": "El pueblo tiene hambre. Tráeme 10 panes y te recompensaré bien.",
+
+  "quest.mod.carbon_para_el_invierno.title": "Carbón para el invierno",
+  "quest.mod.carbon_para_el_invierno.description": "Nos vamos a congelar sin combustible. Necesito 16 carbones antes de que caiga la primera nieve.",
+
+  "quest.mod.cuero_para_el_sastre.title": "Cuero para el sastre",
+  "quest.mod.cuero_para_el_sastre.description": "Necesito cuero para reparar la armadura de los guardias. Tráeme 5 pieles y vuelve a recoger tu recompensa.",
+
+  "quest.mod.tinta_para_el_bibliotecario.title": "Tinta para el bibliotecario",
+  "quest.mod.tinta_para_el_bibliotecario.description": "Mi pluma se quedó sin tinta y aún queda mucho por escribir. Tráeme 4 sacos de tinta del mar.",
+
+  "quest.mod.reparacion_herramientas.title": "Reparación de herramientas",
+  "quest.mod.reparacion_herramientas.description": "Las herramientas del pueblo están destrozadas. Necesito 6 lingotes de hierro para arreglarlas. Vuelve cuando los tengas.",
+
+  "quest.mod.perlas_del_comerciante.title": "Perlas del comerciante",
+  "quest.mod.perlas_del_comerciante.description": "Un comerciante pasó por aquí y me dejó endeudado. Necesito 3 perlas de ender para saldar la deuda. Vuelve cuando las tengas.",
+
+  "quest.mod.oro_para_el_joyero.title": "Oro para el joyero",
+  "quest.mod.oro_para_el_joyero.description": "Estoy fabricando un regalo para el anciano del pueblo. Tráeme 4 lingotes de oro y vuelve para que pueda recompensarte como se debe.",
+
+  "quest.mod.diamante_para_el_herrero.title": "Diamante para el herrero",
+  "quest.mod.diamante_para_el_herrero.description": "Toda mi vida he soñado con forjar herramientas de diamante para este pueblo. Tráeme 2 diamantes y regresa. No lo olvidaré.",
+
+  "quest.mod.manzana_dorada.title": "La manzana dorada",
+  "quest.mod.manzana_dorada.description": "El anciano está gravemente enfermo y nada de lo que he intentado ha funcionado. He oído que una manzana dorada puede curar cualquier mal. Por favor, trae una y vuelve pronto.",
+
   "quest.mod.journal.title": "Diario de Misiones",
   "quest.mod.journal.active": "Activas",
   "quest.mod.journal.ready": "Por entregar",

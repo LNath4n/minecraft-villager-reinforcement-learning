@@ -8,6 +8,42 @@
   "quest.mod.minerales_escasos.title": "Scarce Minerals",
   "quest.mod.minerales_escasos.description": "The village blacksmiths need iron. Get me 3 ingots and I will reward you well.",
 
+  "quest.mod.provisiones_granja.title": "Farm Supplies",
+  "quest.mod.provisiones_granja.description": "The harvest was poor this season. I need 8 carrots to feed the village through winter.",
+
+  "quest.mod.madera_oscura.title": "Dark Timber",
+  "quest.mod.madera_oscura.description": "The village walls need reinforcing. Bring me 10 dark oak logs and I will make it worth your while.",
+
+  "quest.mod.lana_para_camas.title": "Wool for Beds",
+  "quest.mod.lana_para_camas.description": "Several families lost their beds in the last raid. I need 6 wool to make new ones.",
+
+  "quest.mod.pan_para_el_pueblo.title": "Bread for the Village",
+  "quest.mod.pan_para_el_pueblo.description": "The village is hungry. Bring me 10 loaves of bread and I will reward you well.",
+
+  "quest.mod.carbon_para_el_invierno.title": "Coal for Winter",
+  "quest.mod.carbon_para_el_invierno.description": "We will freeze without fuel. I need 16 pieces of coal before the first snow falls.",
+
+  "quest.mod.cuero_para_el_sastre.title": "Leather for the Tailor",
+  "quest.mod.cuero_para_el_sastre.description": "I need leather to repair the guards' armor. Bring me 5 hides and come back to collect your reward.",
+
+  "quest.mod.tinta_para_el_bibliotecario.title": "Ink for the Librarian",
+  "quest.mod.tinta_para_el_bibliotecario.description": "My quill has run dry and there is much left to write. Bring me 4 ink sacs from the sea.",
+
+  "quest.mod.reparacion_herramientas.title": "Tool Repairs",
+  "quest.mod.reparacion_herramientas.description": "The village tools are falling apart. I need 6 iron ingots to fix them. Come back when you have them.",
+
+  "quest.mod.perlas_del_comerciante.title": "Merchant's Pearls",
+  "quest.mod.perlas_del_comerciante.description": "A wandering merchant passed through and left me in debt. I need 3 ender pearls to settle it. Return to me once you have them.",
+
+  "quest.mod.oro_para_el_joyero.title": "Gold for the Jeweler",
+  "quest.mod.oro_para_el_joyero.description": "I am crafting a gift for the village elder. Bring me 4 gold ingots and return so I can reward you properly.",
+
+  "quest.mod.diamante_para_el_herrero.title": "Diamond for the Blacksmith",
+  "quest.mod.diamante_para_el_herrero.description": "I have dreamed of forging diamond tools for this village my whole life. Bring me 2 diamonds and come back. I will not forget it.",
+
+  "quest.mod.manzana_dorada.title": "The Golden Apple",
+  "quest.mod.manzana_dorada.description": "Our elder is gravely ill and nothing I have tried has worked. I have heard a golden apple can cure any ailment. Please, bring one and return quickly.",
+
   "quest.mod.journal.title": "Quest Journal",
   "quest.mod.journal.active": "Active",
   "quest.mod.journal.ready": "Ready to turn in",

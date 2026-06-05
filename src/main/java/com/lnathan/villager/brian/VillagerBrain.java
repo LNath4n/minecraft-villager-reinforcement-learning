@@ -1,5 +1,7 @@
 package com.lnathan.villager.brian;
-
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import com.lnathan.villager.VillagerDataSync;
 import com.lnathan.villager.VillagerState;
 import com.lnathan.villager.behavior.DepositHandler;
@@ -19,64 +21,121 @@ import java.util.Random;
 import java.util.Set;
 
 /**
- * VillagerBrain con Deep Q-Network (DQN).
- * State vector: 13 floats
- *   [0] hunger              [1] wood_norm           [2] stone_norm
- *   [3] enemy_norm          [4] villager_norm       [5] food_norm
- *   [6] is_night            [7] health_norm         [8] last_damage_type
- *   [9] was_hurt_recently   [10] food_count_norm    [11] inv_full
- *   [12] item_count_norm
+ * VillagerBrain con Deep Q-Network (DQN) + contexto situacional mixto.
+ *
+ * <p>State vector: 16 floats</p>
+ * <pre>
+ *  [0]  hunger              [1]  wood_norm          [2]  stone_norm
+ *  [3]  enemy_norm          [4]  villager_norm       [5]  food_norm
+ *  [6]  health_norm         [7]  last_damage_type    [8]  was_hurt_recently
+ *  [9]  inv_full            [10] item_count_norm
+ *   flags de contexto (VillagerContext)
+ *  [11] flag_combat         [12] flag_hungry         [13] flag_night
+ *  [14] flag_was_hurt       [15] flag_inv_full
+ *
+ *  REMOVED (duplicados):
+ *    is_night      → idéntico a flag_night (VillagerContext)
+ *    food_count_norm → mismo conteo que food_norm, distinto divisor
+ * </pre>
+ *
+ * <p>El reward es aditivo: cada flag activo ignorado suma una penalización
+ * independiente sobre el reward base de la acción. Esto permite que el DQN
+ * aprenda que ignorar múltiples urgencias es peor que ignorar una sola.</p>
  */
 public class VillagerBrain {
 
-    private PickupHandler pickupHandler;
+    private PickupHandler  pickupHandler;
     private DepositHandler depositHandler;
 
-    //  Arquitectura 
+    private int            tickCounter  = 0;
+    private static final int DECISION_INTERVAL = 4;
 
-    private static final int   INPUT_SIZE  = 13;
-    private static final int   HIDDEN_SIZE = 32;
-    private static final int   OUTPUT_SIZE = VillagerAction.values().length; // 10
-    private static final int[] LAYER_SIZES = {INPUT_SIZE, 32, 32, OUTPUT_SIZE};
+    //  Arquitectura
+
+    /**
+     * 13 features base + 5 flags de contexto.
+     * Si agregas flags en VillagerContext, sube este número y ajusta LAYER_SIZES.
+     */
+    private static final int   INPUT_SIZE   = 16; // FIX: eliminadas 2 features duplicadas (is_night y food_count_norm)
+    private static final int   OUTPUT_SIZE  = VillagerAction.values().length; // 10
+    private static final int[] LAYER_SIZES  = {INPUT_SIZE, 64, 64, OUTPUT_SIZE}; // INPUT_SIZE ahora = 16
     private static final float LEARNING_RATE = 0.001f;
 
-    //  Hiperparámetros DQN 
+    //  Hiperparámetros DQN
 
-    private static final float GAMMA             = 0.99f;
-    private static final float EPSILON_START     = 1.0f;
-    private static final float EPSILON_MIN       = 0.05f;
-    private static final float EPSILON_DECAY     = 0.00005f;
-    private static final int   BATCH_SIZE        = 32;
-    private static final int   BUFFER_CAPACITY   = 10_000;
-    private static final int   MIN_BUFFER        = 256;
+    private static final float GAMMA              = 0.99f;
+    private static final float EPSILON_START      = 1.0f;
+    private static final float EPSILON_MIN        = 0.05f;
+    private static final float EPSILON_DECAY      = 0.00005f;
+    private static final int   BATCH_SIZE         = 32;
+    private static final int   BUFFER_CAPACITY    = 10_000;
+    private static final int   MIN_BUFFER         = 256;
     private static final int   TARGET_UPDATE_FREQ = 500;
-    private static final int   TRAIN_EVERY       = 4;
-    private static final int   SAVE_EVERY        = 6000;
+    private static final int   TRAIN_EVERY        = 4;
+    private static final int   SAVE_EVERY         = 6000;
 
     private static final boolean USE_PYTHON_DQN = true;
 
-    //  Slots del inventario del mod 
+    //  Penalizaciones por ignorar flags (reward aditivo)
+
+    /**
+     * Penalización base por ignorar un flag de combate activo.
+     * Se suma solo si la acción elegida no es FLEE y hay enemies > 0.
+     */
+    private static final float PEN_IGNORE_COMBAT    = -0.25f;
+
+    /**
+     * Penalización por ignorar hambre activa.
+     * Se suma si la acción no es EAT y el aldeano tiene hambre.
+     */
+    private static final float PEN_IGNORE_HUNGER    = -0.15f;
+
+    /**
+     * Penalización por ignorar inventario lleno.
+     * Se suma si la acción no es STORE_ITEMS y el inventario está lleno.
+     */
+    private static final float PEN_IGNORE_INV_FULL  = -0.10f;
+
+    /**
+     * Penalización por ignorar daño reciente.
+     * Pequeña — wasHurtRecently es informativo, no siempre urgente.
+     */
+    private static final float PEN_IGNORE_HURT      = -0.05f;
+
+    //  Slots del inventario del mod
+
     /** Los slots del mod empiezan en 8 (0-7 son vanilla). */
     private static final int INV_START = 8;
 
-    //  Sistema social 
-    /** Puntos sociales acumulados. Se persisten en NBT via VillagerMixin. */
+    //  Sistema social
+
     private int socialPoints = 0;
 
-    //  Comida 
+    //  Comida conocida
 
     private static final Set<Item> FOOD_ITEMS = Set.of(
             Items.BREAD, Items.APPLE, Items.CARROT, Items.POTATO
     );
 
-    //  Componentes DQN 
+    //  Componentes DQN
 
-    private final NeuralNetwork    mainNet;
-    private final TargetNetwork    targetNet;
-    private final ReplayBuffer     replayBuffer;
-    private final PythonDQNClient  pythonClient;
+    private final NeuralNetwork   mainNet;
+    private final TargetNetwork   targetNet;
+    private final ReplayBuffer    replayBuffer;
+    private final PythonDQNClient pythonClient;
 
-    //  Estado interno 
+    //  Entrenamiento asíncrono
+
+    private static final ExecutorService TRAIN_EXECUTOR =
+            Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "villager-dqn-trainer");
+                t.setDaemon(true); // no bloquea el shutdown del servidor
+                return t;
+            });
+
+    private final AtomicBoolean trainingInProgress = new AtomicBoolean(false);
+
+    //  Estado interno
 
     private float[]        prevState  = null;
     private VillagerAction prevAction = null;
@@ -86,7 +145,7 @@ public class VillagerBrain {
     private final String   villagerUUID;
     private final Random   random     = new Random();
 
-    //  Constructor 
+    //  Constructor
 
     public VillagerBrain(String villagerUUID) {
         this.villagerUUID = villagerUUID;
@@ -98,31 +157,68 @@ public class VillagerBrain {
         loadNetwork();
     }
 
-    //  Tick principal 
+    //  Tick principal
 
     /**
-     * @param hurtTracker viene del VillagerMixin — vive allí para poder
-     *                    hookear hurtServer() sin pasar por VillagerDataSync.
+     * Punto de entrada desde el DQNNode del BT.
+     *
+     * <p>Flujo:</p>
+     * <ol>
+     *   <li>Construye el contexto situacional ({@link VillagerContext}).</li>
+     *   <li>Construye el state vector (13 base + 5 flags).</li>
+     *   <li>Elige acción con epsilon-greedy.</li>
+     *   <li>Ejecuta la acción mediante los handlers.</li>
+     *   <li>Calcula reward aditivo según acción + contexto.</li>
+     *   <li>Almacena experiencia y entrena si corresponde.</li>
+     *   <li>Reporta al monitor Python.</li>
+     * </ol>
+     *
+     * @param hurtTracker viene del VillagerMixin — hookea hurtServer()
      */
     public void tick(Villager self, ServerLevel level, SimpleContainer inventory,
                      VillagerHurtTracker hurtTracker,
                      PickupHandler pickupHandler, DepositHandler depositHandler) {
+
+        hurtTracker.tick();
+        if (++tickCounter < DECISION_INTERVAL) return;
+        tickCounter = 0;
+
         this.pickupHandler  = pickupHandler;
         this.depositHandler = depositHandler;
 
-        hurtTracker.tick(); // avanzar memoria de daño
-
-        int enemies   = level.getEntitiesOfClass(Monster.class,  self.getBoundingBox().inflate(16.0)).size();
+        // Contexto situacional — se evalúa una vez por tick
+        List<Monster> nearbyMonsters = level.getEntitiesOfClass(
+                Monster.class, self.getBoundingBox().inflate(16.0));
+        int enemies   = nearbyMonsters.size();
         int villagers = Math.max(0,
-                level.getEntitiesOfClass(Villager.class, self.getBoundingBox().inflate(20.0)).size() - 1);
+                level.getEntitiesOfClass(Villager.class,
+                        self.getBoundingBox().inflate(20.0)).size() - 1);
 
-        float[] currentState = buildStateVector(self, level, inventory, enemies, villagers, hurtTracker);
+        VillagerContext ctx = VillagerContext.build(self, level, inventory, hurtTracker, nearbyMonsters);
 
-        //  Java decide la acción 
-        VillagerAction action = chooseAction(currentState);
-        float          reward = executeAction(self, level, inventory, action, enemies, villagers);
+        float[] currentState = buildStateVector(self, level, inventory,
+                enemies, villagers, hurtTracker, ctx);
 
-        // Entrenamiento local
+        // Elegir y ejecutar acción
+        // FIX: chooseAction ahora devuelve también los qValues para no repetir forward()
+        ActionChoice choice   = chooseAction(currentState);
+        VillagerAction action = choice.action();
+        float baseReward      = executeAction(self, level, inventory, action, enemies, villagers);
+
+        // Reward aditivo — penalizar por flags ignorados
+        float reward = baseReward + contextPenalty(action, ctx);
+/*
+        System.out.printf("[Brain %s] %s → reward %.3f (base %.3f pen %.3f) ε=%.3f%n",
+                villagerUUID.substring(0, 8),
+                action.name(),
+                reward,
+                baseReward,
+                reward - baseReward,   // la penalización neta
+                epsilon
+        );*/
+
+
+        // Almacenar experiencia y entrenar
         if (prevState != null && prevAction != null) {
             replayBuffer.add(prevState, prevAction.ordinal(), reward, currentState, false);
         }
@@ -130,13 +226,14 @@ public class VillagerBrain {
             trainStep();
         }
 
-        //  Reportar al monitor Python (solo visualización) 
+        // Reportar al monitor Python
+        // FIX: reutilizamos choice.qValues() — ya calculados en chooseAction(),
+        // eliminando un segundo forward() por tick.
         if (USE_PYTHON_DQN) {
-            float[] qValues = mainNet.forward(currentState);
-            String  mode    = random.nextFloat() < epsilon ? "random" : "greedy";
+            String mode = choice.qValues().length == 0 ? "random" : "greedy";
             pythonClient.report(
                     action.name(), action.ordinal(), reward,
-                    qValues, currentState,
+                    choice.qValues(), currentState,
                     epsilon, mode,
                     totalSteps, replayBuffer.size(),
                     socialPoints
@@ -152,179 +249,241 @@ public class VillagerBrain {
             saveNetwork();
             ticksSinceSave = 0;
         }
-
-        //System.out.println("[DQN] step=" + totalSteps +
-                //" eps=" + String.format("%.3f", epsilon) +
-                //" buf=" + replayBuffer.size() +
-                //" action=" + action +
-                //" reward=" + String.format("%.2f", reward));
     }
 
-    //  State vector (10 floats) 
+    //  Reward aditivo por contexto
 
+    /**
+     * Calcula la penalización total por ignorar flags activos.
+     *
+     * <p>Cada flag tiene su propia penalización independiente. Si la acción
+     * elegida "atiende" un flag (ej. FLEE atiende combat), ese flag no penaliza.
+     * Si ignora varios flags simultáneamente, las penalizaciones se acumulan.</p>
+     *
+     * <p>Ejemplo: aldeano hambriento bajo ataque que hace IDLE recibe:
+     * {@code PEN_IGNORE_COMBAT + PEN_IGNORE_HUNGER = -0.25 + -0.15 = -0.40}
+     * sobre el reward base del IDLE.</p>
+     *
+     * @param action acción que el DQN eligió
+     * @param ctx    contexto situacional evaluado este tick
+     * @return penalización total (negativa o 0.0)
+     */
+    private float contextPenalty(VillagerAction action, VillagerContext ctx) {
+        float penalty = 0f;
+
+        // Combat ignorado — solo perdona FLEE
+        if (ctx.combat && action != VillagerAction.FLEE) {
+            penalty += PEN_IGNORE_COMBAT;
+        }
+
+        // Hambre ignorada — solo perdona EAT
+        if (ctx.hungry && action != VillagerAction.EAT) {
+            penalty += PEN_IGNORE_HUNGER;
+        }
+
+        // Inventario lleno ignorado — solo perdona STORE_ITEMS
+        if (ctx.inventoryFull && action != VillagerAction.STORE_ITEMS) {
+            penalty += PEN_IGNORE_INV_FULL;
+        }
+
+        // Daño reciente ignorado — perdona FLEE y EAT (curación indirecta)
+        if (ctx.wasHurtRecently
+                && action != VillagerAction.FLEE
+                && action != VillagerAction.EAT) {
+            penalty += PEN_IGNORE_HURT;
+        }
+
+        // flag_night no penaliza por sí solo — influye en el reward de REST/EXPLORE
+        // directamente en executeAction
+
+        return penalty;
+    }
+
+    //  State vector (18 floats)
+
+    /**
+     * Construye el vector de estado concatenando los 13 features base
+     * con los 5 flags exportados por {@link VillagerContext#toFlagArray()}.
+     */
     private float[] buildStateVector(Villager self, ServerLevel level,
                                      SimpleContainer inventory,
                                      int enemies, int villagers,
-                                     VillagerHurtTracker hurt) {
+                                     VillagerHurtTracker hurt,
+                                     VillagerContext ctx) {
         int wood = 0, stone = 0, foodCount = 0, totalItems = 0;
 
         for (int i = INV_START; i < inventory.getContainerSize(); i++) {
             ItemStack s = inventory.getItem(i);
             if (s.isEmpty()) continue;
-            if (s.is(net.minecraft.tags.ItemTags.LOGS))                          wood      += s.getCount();
-            if (s.getItem() == Items.COBBLESTONE || s.getItem() == Items.STONE)  stone     += s.getCount();
-            if (FOOD_ITEMS.contains(s.getItem()))                                foodCount += s.getCount();
+            if (s.is(net.minecraft.tags.ItemTags.LOGS))                         wood      += s.getCount();
+            if (s.getItem() == Items.COBBLESTONE || s.getItem() == Items.STONE) stone     += s.getCount();
+            if (FOOD_ITEMS.contains(s.getItem()))                               foodCount += s.getCount();
             totalItems += s.getCount();
         }
 
-        // [0-6] base
-        float hunger    = self.wantsMoreFood() ? 1.0f : 0.0f;
-        float woodNorm  = Math.min(wood      / 64f, 1.0f);
-        float stoneNorm = Math.min(stone     / 64f, 1.0f);
-        float enemyNorm = Math.min(enemies   / 5f,  1.0f);
-        float villNorm  = Math.min(villagers / 5f,  1.0f);
-        float foodNorm  = Math.min(foodCount / 16f, 1.0f);
-        float night     = (level.getOverworldClockTime() % 24000) > 13000 ? 1.0f : 0.0f;
-
-        // [7-9] daño y salud
+        // [0-10] base
+        // FIX: eliminados is_night (duplicado de flag_night) y food_count_norm (duplicado de food_norm)
+        float hunger          = self.wantsMoreFood() ? 1.0f : 0.0f;
+        float woodNorm        = Math.min(wood      / 64f, 1.0f);
+        float stoneNorm       = Math.min(stone     / 64f, 1.0f);
+        float enemyNorm       = Math.min(enemies   / 5f,  1.0f);
+        float villNorm        = Math.min(villagers / 5f,  1.0f);
+        float foodNorm        = Math.min(foodCount / 16f, 1.0f);
+        // is_night ELIMINADO — idéntico a flags[2] (flag_night de VillagerContext)
         float healthNorm      = VillagerHurtTracker.healthNorm(self);
         float lastDamageType  = hurt.lastDamageType();
         float wasHurtRecently = hurt.wasHurtRecently();
+        // food_count_norm ELIMINADO — mismo dato que foodNorm, solo distinto divisor
+        float invFull         = isInventoryFull(inventory) ? 1.0f : 0.0f;
+        float itemCountNorm   = Math.min(totalItems / 64f, 1.0f);
 
-        // [10-12] inventario extendido (slots del mod)
-        float foodCountNorm = Math.min(foodCount / 32f, 1.0f); // umbral +15 visible
-        float invFull       = isInventoryFull(inventory) ? 1.0f : 0.0f;
-        float itemCountNorm = Math.min(totalItems / 64f, 1.0f);
+        // [11-15] flags del contexto
+        float[] flags = ctx.toFlagArray();
 
         return new float[]{
-                hunger, woodNorm, stoneNorm, enemyNorm, villNorm, foodNorm, night,
+                hunger, woodNorm, stoneNorm, enemyNorm, villNorm, foodNorm,
                 healthNorm, lastDamageType, wasHurtRecently,
-                foodCountNorm, invFull, itemCountNorm
+                invFull, itemCountNorm,
+                flags[0], flags[1], flags[2], flags[3], flags[4]
         };
     }
 
-    //  Epsilon-greedy 
+    //  Epsilon-greedy
 
-    private VillagerAction chooseAction(float[] state) {
+    /**
+     * Record que agrupa la acción elegida y los Q-values calculados.
+     * FIX: evitar un segundo forward() en el reporte Python — reutilizamos
+     * los Q-values ya calculados durante la selección greedy.
+     */
+    private record ActionChoice(VillagerAction action, float[] qValues) {}
+
+    private ActionChoice chooseAction(float[] state) {
         if (random.nextFloat() < epsilon) {
-            return VillagerAction.values()[random.nextInt(OUTPUT_SIZE)];
+            // Exploración aleatoria — no calculamos Q-values (no los necesitamos)
+            return new ActionChoice(
+                    VillagerAction.values()[random.nextInt(OUTPUT_SIZE)],
+                    new float[0] // array vacío: el reporte Python acepta q_values:[]
+            );
         }
         float[] qValues = mainNet.forward(state);
         int best = 0;
         for (int i = 1; i < qValues.length; i++) {
             if (qValues[i] > qValues[best]) best = i;
         }
-        return VillagerAction.values()[best];
+        return new ActionChoice(VillagerAction.values()[best], qValues);
     }
 
-    //  Training step 
+    //  Training step (asíncrono)
 
     private void trainStep() {
-        ReplayBuffer.Experience[] batch = replayBuffer.sample(BATCH_SIZE);
-        if (batch == null) return;
+        // Si ya hay un batch entrenando en el hilo, skip — no acumular cola
+        if (!trainingInProgress.compareAndSet(false, true)) return;
 
+        ReplayBuffer.Experience[] batch = replayBuffer.sample(BATCH_SIZE);
+        if (batch == null) {
+            trainingInProgress.set(false);
+            return;
+        }
+
+        // Preparar inputs/targets en el server thread (acceso seguro a mainNet/targetNet)
         float[][] inputs  = new float[BATCH_SIZE][INPUT_SIZE];
         float[][] targets = new float[BATCH_SIZE][OUTPUT_SIZE];
 
         for (int i = 0; i < BATCH_SIZE; i++) {
             ReplayBuffer.Experience exp = batch[i];
-            float[] currentQ  = mainNet.forward(exp.state);
-            float   maxNextQ  = 0f;
+            float[] currentQ = mainNet.forward(exp.state);
+            float   maxNextQ = 0f;
             if (!exp.done) {
                 float[] nextQ = targetNet.forward(exp.nextState);
                 for (float v : nextQ) if (v > maxNextQ) maxNextQ = v;
             }
             inputs[i]              = exp.state;
-            targets[i]             = currentQ;
+            targets[i]             = currentQ.clone(); // clone: el hilo no comparte ref con mainNet
             targets[i][exp.action] = exp.reward + GAMMA * maxNextQ;
         }
 
-        mainNet.train(inputs, targets);
-
-        if (targetNet.maybeUpdate(mainNet)) {
-            //System.out.println("[DQN] Target network sync en step=" + totalSteps);
-        }
+        // El backprop pesado corre fuera del server thread
+        TRAIN_EXECUTOR.submit(() -> {
+            try {
+                mainNet.train(inputs, targets);
+                targetNet.maybeUpdate(mainNet);
+            } finally {
+                trainingInProgress.set(false);
+            }
+        });
     }
 
     //  Execute action 
 
+    /**
+     * Ejecuta la acción elegida por el DQN y devuelve el reward base.
+     * El reward final se calcula en {@link #tick} sumando {@link #contextPenalty}.
+     */
     private float executeAction(Villager self, ServerLevel level,
                                 SimpleContainer inventory, VillagerAction action,
                                 int enemies, int villagers) {
-        VillagerDataSync sync    = (VillagerDataSync) self;
-        boolean          hungry  = self.wantsMoreFood();
-        boolean          isNight = (level.getOverworldClockTime() % 24000) > 13000;
+        VillagerDataSync sync   = (VillagerDataSync) self;
+        boolean hungry          = self.wantsMoreFood();
+        boolean isNight         = (level.getOverworldClockTime() % 24000) > 13000;
 
         return switch (action) {
 
             //  IDLE 
-            // Neutro si no hay nada urgente; penaliza si hay cosas pendientes.
             case IDLE -> {
                 sync.setVillagerState(VillagerState.IDLE);
                 float p = 0f;
-                if (hungry)      p -= 0.3f;
-                if (enemies > 0) p -= 0.5f;
+                if (hungry)                   p -= 0.3f;
+                if (enemies > 0)              p -= 0.5f;
                 if (isInventoryFull(inventory)) p -= 0.2f;
-                yield p; // 0.0 si no había urgencias, negativo si las había
+                yield p;
             }
 
             //  EAT 
-            // Come real: -0.15 por ítem consumido, +0.8 si resuelve el hambre.
             case EAT -> {
                 ItemStack food = findFood(inventory);
-                if (food == null)  yield -0.2f;  // no había comida — imposible
-                if (!hungry)       yield -0.15f; // comió sin necesidad — desperdicio
+                if (food == null)  yield -0.2f;
+                if (!hungry)       yield -0.15f;
                 food.shrink(1);
                 boolean stillHungry = self.wantsMoreFood();
-                yield stillHungry ? 0.3f : 0.65f; // 0.65 = +0.8 hambre resuelta -0.15 ítem
+                yield stillHungry ? 0.3f : 0.65f;
             }
 
             //  GATHER 
-            // Inútil si el inventario ya está lleno. Bonus por ítems acumulados.
             case GATHER_WOOD, GATHER_STONE -> {
                 if (isInventoryFull(inventory)) {
                     sync.setVillagerState(VillagerState.IDLE);
                     yield -0.15f;
                 }
                 sync.setVillagerState(VillagerState.GATHERING);
-
                 int before = countItems(inventory);
-                pickupHandler.tick(self, level, inventory); // ← acción real
-                int after  = countItems(inventory);
-
+                pickupHandler.tick(self, level, inventory);
+                int after     = countItems(inventory);
                 int collected = after - before;
-                if (collected > 0) {
-                    yield 0.1f + Math.min(collected * 0.05f, 0.3f); // reward real
-                } else {
-                    yield -0.05f; // quiso recoger pero no había nada cerca
-                }
+                yield collected > 0
+                        ? 0.1f + Math.min(collected * 0.05f, 0.3f)
+                        : -0.05f;
             }
 
             //  STORE 
-            // Más ítems acumulados = más valor en guardarlos.
             case STORE_ITEMS -> {
                 int items = countItems(inventory);
-                if (items == 0) { yield -0.1f; }
+                if (items == 0) yield -0.1f;
                 sync.setVillagerState(VillagerState.DEPOSITING);
-                depositHandler.tick(self, level); // ← ya existía pero no se llamaba aquí
+                depositHandler.tick(self, level);
                 yield Math.min(0.1f + items / 20f, 0.5f);
             }
 
             //  FLEE 
-            // Más enemigos = más urgente = más recompensa.
             case FLEE -> {
                 if (enemies == 0) {
                     sync.setVillagerState(VillagerState.NORMAL);
-                    yield -0.2f; // huyó de nada
+                    yield -0.2f;
                 }
                 sync.setVillagerState(VillagerState.FLEEING);
                 yield Math.min(0.3f + enemies * 0.1f, 0.7f);
             }
 
             //  SOCIALIZE 
-            // Navega al más cercano. Si está a ≤3 bloques, intenta intercambio de comida.
-            // Dar:    pierde 1 food (-0.1) + gana punto social (+0.2) → neto positivo
-            // Recibir: gana 1 food si tenía hambre → +0.4
             case SOCIALIZE -> {
                 if (villagers == 0) {
                     sync.setVillagerState(VillagerState.IDLE);
@@ -344,14 +503,12 @@ public class VillagerBrain {
 
                 float socialBonus = Math.min(socialPoints * 0.01f, 0.2f);
 
-                // Intercambio solo si están muy cerca
                 if (self.distanceToSqr(nearest) <= 3 * 3
                         && nearest instanceof net.minecraft.world.entity.npc.InventoryCarrier carrier) {
 
                     net.minecraft.world.SimpleContainer otherInv =
                             (net.minecraft.world.SimpleContainer) carrier.getInventory();
 
-                    // ¿Puedo dar? (tengo +15 comida y el otro tiene hambre)
                     int myFood = countFoodItems(inventory);
                     if (myFood > 15 && nearest.wantsMoreFood()) {
                         ItemStack myFoodStack = findFood(inventory);
@@ -359,11 +516,9 @@ public class VillagerBrain {
                             otherInv.addItem(myFoodStack.copyWithCount(1));
                             myFoodStack.shrink(1);
                             socialPoints++;
-                            yield 0.1f + socialBonus; // -0.1 ítem + 0.2 social
+                            yield 0.1f + socialBonus;
                         }
                     }
-
-                    // ¿Puedo recibir? (tengo hambre y el otro tiene +15 comida)
                     if (hungry && countFoodInContainer(otherInv) > 15) {
                         ItemStack theirFood = findFoodInContainer(otherInv);
                         if (theirFood != null) {
@@ -372,12 +527,8 @@ public class VillagerBrain {
                             yield 0.4f;
                         }
                     }
-
-                    // Llegué pero sin intercambio — igual suma socializar
                     yield 0.05f + socialBonus;
                 }
-
-                // Todavía caminando hacia el otro aldeano
                 yield 0.03f + Math.min(socialPoints * 0.005f, 0.1f);
             }
 
@@ -388,14 +539,12 @@ public class VillagerBrain {
             }
 
             //  BUILD 
-            // Placeholder — 0 para que el DQN no lo prefiera sobre acciones reales.
             case BUILD -> {
                 sync.setVillagerState(VillagerState.BUILDING);
                 yield 0.0f;
             }
 
             //  EXPLORE 
-            // Penaliza si hay urgencias. Bonus por ítems descubiertos en el área.
             case EXPLORE -> {
                 if (hungry || enemies > 0) {
                     sync.setVillagerState(VillagerState.IDLE);
@@ -412,8 +561,7 @@ public class VillagerBrain {
                 int itemsNearby = level.getEntitiesOfClass(
                         net.minecraft.world.entity.item.ItemEntity.class,
                         self.getBoundingBox().inflate(dist),
-                        e -> com.lnathan.villager.behavior.PickupHandler.PICKUP_ITEMS
-                                .contains(e.getItem().getItem())
+                        e -> PickupHandler.PICKUP_ITEMS.contains(e.getItem().getItem())
                 ).size();
                 yield 0.05f + Math.min(itemsNearby * 0.05f, 0.2f);
             }
@@ -422,7 +570,6 @@ public class VillagerBrain {
 
     //  Inventario helpers 
 
-    /** Busca comida en los slots del mod (8+). */
     private ItemStack findFood(SimpleContainer inv) {
         for (int i = INV_START; i < inv.getContainerSize(); i++) {
             ItemStack s = inv.getItem(i);
@@ -431,14 +578,12 @@ public class VillagerBrain {
         return null;
     }
 
-    /** Cuenta todos los ítems en los slots del mod (8+). */
     private int countItems(SimpleContainer inv) {
         int total = 0;
         for (int i = INV_START; i < inv.getContainerSize(); i++) total += inv.getItem(i).getCount();
         return total;
     }
 
-    /** Comprueba si todos los slots del mod (8+) están llenos. */
     private boolean isInventoryFull(SimpleContainer inv) {
         for (int i = INV_START; i < inv.getContainerSize(); i++) {
             if (inv.getItem(i).isEmpty()) return false;
@@ -446,7 +591,6 @@ public class VillagerBrain {
         return true;
     }
 
-    /** Cuenta unidades de comida en los slots del mod (8+). */
     private int countFoodItems(SimpleContainer inv) {
         int total = 0;
         for (int i = INV_START; i < inv.getContainerSize(); i++) {
@@ -456,7 +600,6 @@ public class VillagerBrain {
         return total;
     }
 
-    /** Cuenta comida en un contenedor vanilla (inventario de otro aldeano). */
     private int countFoodInContainer(net.minecraft.world.SimpleContainer inv) {
         int total = 0;
         for (int i = 0; i < inv.getContainerSize(); i++) {
@@ -466,7 +609,6 @@ public class VillagerBrain {
         return total;
     }
 
-    /** Busca comida en un contenedor vanilla (inventario de otro aldeano). */
     private ItemStack findFoodInContainer(net.minecraft.world.SimpleContainer inv) {
         for (int i = 0; i < inv.getContainerSize(); i++) {
             ItemStack s = inv.getItem(i);
@@ -475,19 +617,18 @@ public class VillagerBrain {
         return null;
     }
 
-    // Social points xd
+    //  Social points 
 
-    public int  getSocialPoints()          { return socialPoints; }
+    public int  getSocialPoints()           { return socialPoints; }
     public void setSocialPoints(int points) { this.socialPoints = points; }
 
-    // Persistencia
+    //  Persistencia 
 
     private void saveNetwork() {
         try {
             Path dir = Paths.get("config", "villager_brain");
             Files.createDirectories(dir);
             mainNet.save(dir.resolve(villagerUUID + ".bin"));
-            ////System.out.println("[DQN] Red guardada. Steps=" + totalSteps + " eps=" + epsilon);
         } catch (IOException e) {
             System.err.println("[DQN] Error guardando red: " + e.getMessage());
         }
@@ -500,10 +641,14 @@ public class VillagerBrain {
             mainNet.load(file);
             targetNet.sync(mainNet);
             epsilon = EPSILON_MIN;
-            //System.out.println("[DQN] Red cargada desde " + file);
         } catch (Exception e) {
             System.err.println("[DQN] Error cargando red: " + e.getMessage());
         }
+    }
+
+    public void addSocialPoints(int points) {
+        this.socialPoints += points;
+        //System.out.println("[Social " + villagerUUID.substring(0, 8) + "] +" + points + " pts → total: " + socialPoints);
     }
 
     //  Getters 

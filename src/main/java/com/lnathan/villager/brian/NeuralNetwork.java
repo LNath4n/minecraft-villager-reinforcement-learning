@@ -3,31 +3,41 @@ package com.lnathan.villager.brian;
 import java.io.*;
 import java.nio.file.*;
 import java.util.Random;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Red neuronal fully-connected con backpropagation.
  * Arquitectura: 7 → 32 → 32 → 10 (configurable).
  * Activación oculta: ReLU. Salida: lineal (Q-values).
  * Sin dependencias externas — solo arrays float[][].
+ *
+ * FIX: ReadWriteLock en forward() y train() para eliminar el data race
+ * cuando el entrenamiento asíncrono y el server thread acceden
+ * concurrentemente a los pesos.
+ *
+ * Múltiples forwards pueden correr en paralelo (read lock compartido).
+ * Un solo train() bloquea todos los forwards hasta terminar (write lock exclusivo).
  */
 public class NeuralNetwork implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    //  Pesos y biases 
+    // Pesos y biases
     // weights[l][j][i] = peso desde neurona i (capa l) hasta neurona j (capa l+1)
     // biases[l][j]     = bias de neurona j en capa l+1
-
     private float[][][] weights;
     private float[][]   biases;
 
-    //  Configuración 
-
-    private final int[] layerSizes; // ej: {7, 32, 32, 10}
+    // Configuración
+    private final int[] layerSizes; // ej: {18, 64, 64, 10}
     private final float learningRate;
     private static final Random RAND = new Random();
 
-    //  Constructor 
+    // FIX: lock para acceso concurrente seguro entre server thread y trainer thread
+    private final ReadWriteLock rwLock = new ReentrantReadWriteLock();
+
+    // Constructor
 
     public NeuralNetwork(int[] layerSizes, float learningRate) {
         this.layerSizes   = layerSizes;
@@ -58,18 +68,25 @@ public class NeuralNetwork implements Serializable {
         }
     }
 
-    //  Forward pass 
+    // Forward pass
 
     /**
      * Propaga la entrada y devuelve los Q-values de salida.
-     * También guarda activaciones intermedias para backprop.
+     *
+     * FIX: read lock — permite múltiples aldeanos haciendo forward
+     * simultáneamente, pero bloquea si train() tiene el write lock.
      */
     public float[] forward(float[] input) {
-        float[] current = input;
-        for (int l = 0; l < weights.length; l++) {
-            current = layer(current, weights[l], biases[l], l < weights.length - 1);
+        rwLock.readLock().lock();
+        try {
+            float[] current = input;
+            for (int l = 0; l < weights.length; l++) {
+                current = layer(current, weights[l], biases[l], l < weights.length - 1);
+            }
+            return current;
+        } finally {
+            rwLock.readLock().unlock();
         }
-        return current;
     }
 
     /** Una capa: z = W·x + b, luego ReLU (si no es la última capa). */
@@ -86,10 +103,13 @@ public class NeuralNetwork implements Serializable {
         return result;
     }
 
-    //  Backpropagation 
+    // Backpropagation
 
     /**
      * Actualiza los pesos dado un batch de experiencias.
+     *
+     * FIX: write lock exclusivo — bloquea todos los forwards mientras
+     * los pesos se están actualizando. Es la única operación que escribe.
      *
      * @param inputs   batch de vectores de estado [batchSize][inputSize]
      * @param targets  Q-values objetivo [batchSize][numActions]
@@ -105,29 +125,29 @@ public class NeuralNetwork implements Serializable {
             dB[l] = new float[biases[l].length];
         }
 
+        // Forward + backward por cada experiencia del batch
+        // (sin lock aquí — los inputs/targets ya son copias locales)
         for (int b = 0; b < inputs.length; b++) {
-            // Forward — guardar activaciones y pre-activaciones (z)
             float[][] activations = new float[numLayers + 1][];
             float[][] zValues     = new float[numLayers][];
             activations[0] = inputs[b];
 
             for (int l = 0; l < numLayers; l++) {
                 boolean isLast = (l == numLayers - 1);
+                // FIX: accedemos a weights/biases localmente — el write lock
+                // los protegerá en el bloque de apply al final
                 zValues[l]         = computeZ(activations[l], weights[l], biases[l]);
                 activations[l + 1] = applyActivation(zValues[l], !isLast);
             }
 
-            // Backward — calcular deltas desde la capa de salida hacia la entrada
             float[][] deltas = new float[numLayers][];
 
-            // Delta capa salida: dL/dz = (output - target)  [MSE, derivada lineal = 1]
             float[] output = activations[numLayers];
             deltas[numLayers - 1] = new float[output.length];
             for (int j = 0; j < output.length; j++) {
                 deltas[numLayers - 1][j] = output[j] - targets[b][j];
             }
 
-            // Delta capas ocultas: delta[l] = (W[l+1]^T · delta[l+1]) * relu'(z[l])
             for (int l = numLayers - 2; l >= 0; l--) {
                 int size = weights[l].length;
                 deltas[l] = new float[size];
@@ -136,12 +156,10 @@ public class NeuralNetwork implements Serializable {
                     for (int k = 0; k < deltas[l + 1].length; k++) {
                         sum += weights[l + 1][k][j] * deltas[l + 1][k];
                     }
-                    // Derivada ReLU: 1 si z > 0, 0 si no
                     deltas[l][j] = sum * (zValues[l][j] > 0 ? 1f : 0f);
                 }
             }
 
-            // Acumular gradientes: dW[l][j][i] += delta[l][j] * activation[l][i]
             for (int l = 0; l < numLayers; l++) {
                 for (int j = 0; j < deltas[l].length; j++) {
                     dB[l][j] += deltas[l][j];
@@ -152,19 +170,25 @@ public class NeuralNetwork implements Serializable {
             }
         }
 
-        // Aplicar gradiente medio (SGD)
-        float scale = learningRate / inputs.length;
-        for (int l = 0; l < numLayers; l++) {
-            for (int j = 0; j < weights[l].length; j++) {
-                biases[l][j] -= scale * dB[l][j];
-                for (int i = 0; i < weights[l][j].length; i++) {
-                    weights[l][j][i] -= scale * dW[l][j][i];
+        // FIX: write lock exclusivo solo en la aplicación de gradientes
+        // (la parte computacionalmente pesada del backprop corrió sin lock)
+        rwLock.writeLock().lock();
+        try {
+            float scale = learningRate / inputs.length;
+            for (int l = 0; l < numLayers; l++) {
+                for (int j = 0; j < weights[l].length; j++) {
+                    biases[l][j] -= scale * dB[l][j];
+                    for (int i = 0; i < weights[l][j].length; i++) {
+                        weights[l][j][i] -= scale * dW[l][j][i];
+                    }
                 }
             }
+        } finally {
+            rwLock.writeLock().unlock();
         }
     }
 
-    //  Helpers internos 
+    // Helpers internos
 
     private float[] computeZ(float[] input, float[][] w, float[] b) {
         float[] z = new float[w.length];
@@ -181,39 +205,60 @@ public class NeuralNetwork implements Serializable {
         return a;
     }
 
-    //  Copia de pesos (para red objetivo) 
+    // Copia de pesos (para red objetivo)
 
-    /** Devuelve una copia profunda de los pesos de esta red. */
+    /**
+     * Devuelve una copia profunda de los pesos de esta red.
+     * FIX: read lock para evitar race con train() asíncrono.
+     */
     public float[][][] cloneWeights() {
-        float[][][] copy = new float[weights.length][][];
-        for (int l = 0; l < weights.length; l++) {
-            copy[l] = new float[weights[l].length][];
-            for (int j = 0; j < weights[l].length; j++) {
-                copy[l][j] = weights[l][j].clone();
+        rwLock.readLock().lock();
+        try {
+            float[][][] copy = new float[weights.length][][];
+            for (int l = 0; l < weights.length; l++) {
+                copy[l] = new float[weights[l].length][];
+                for (int j = 0; j < weights[l].length; j++) {
+                    copy[l][j] = weights[l][j].clone();
+                }
             }
+            return copy;
+        } finally {
+            rwLock.readLock().unlock();
         }
-        return copy;
     }
 
     public float[][] cloneBiases() {
-        float[][] copy = new float[biases.length][];
-        for (int l = 0; l < biases.length; l++) copy[l] = biases[l].clone();
-        return copy;
+        rwLock.readLock().lock();
+        try {
+            float[][] copy = new float[biases.length][];
+            for (int l = 0; l < biases.length; l++) copy[l] = biases[l].clone();
+            return copy;
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     public void setWeights(float[][][] w, float[][] b) {
-        this.weights = w;
-        this.biases  = b;
+        rwLock.writeLock().lock();
+        try {
+            this.weights = w;
+            this.biases  = b;
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
-    //  Persistencia 
+    // Persistencia
 
     public void save(Path file) throws IOException {
+        rwLock.readLock().lock();
         try (ObjectOutputStream oos = new ObjectOutputStream(
                 new BufferedOutputStream(Files.newOutputStream(file)))) {
             oos.writeObject(weights);
             oos.writeObject(biases);
             oos.writeFloat(learningRate);
+        } finally {
+            rwLock.readLock().unlock();
         }
     }
 
@@ -221,10 +266,17 @@ public class NeuralNetwork implements Serializable {
     public void load(Path file) throws IOException, ClassNotFoundException {
         try (ObjectInputStream ois = new ObjectInputStream(
                 new BufferedInputStream(Files.newInputStream(file)))) {
-            weights = (float[][][]) ois.readObject();
-            biases  = (float[][])   ois.readObject();
-            // learningRate es final, solo lo leemos para validar
+            float[][][] newWeights = (float[][][]) ois.readObject();
+            float[][]   newBiases  = (float[][])   ois.readObject();
             ois.readFloat();
+            // FIX: write lock al asignar los pesos cargados
+            rwLock.writeLock().lock();
+            try {
+                this.weights = newWeights;
+                this.biases  = newBiases;
+            } finally {
+                rwLock.writeLock().unlock();
+            }
         }
     }
 }
